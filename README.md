@@ -22,3 +22,5 @@ Repositório para ser utilizado para a disciplina do programa de engenharia elé
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
 [contributors-shield]: https://img.shields.io/github/contributors/natmourajr/CPE883-2025-02.svg?style=for-the-badge
 [contributors-url]: https://github.com/natmourajr/CPE883-2025-02/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/natmourajr/CPE883-2025-02.svg?style=for-the-badge
+[forks-url]: https://github.com/natmourajr/CPE883-2025-02/network/members
