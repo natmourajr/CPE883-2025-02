@@ -93,19 +93,13 @@ loader = DataLoader(
 
 ```
 ### 📁 Formatos de Dados Suportados
-Imagens: .jpg, .png, .tif
-
-Dados tabulares: .csv, .xlsx, .parquet
-
-Séries temporais: .npy, .hdf5
-
-Dados anotados: .json, .xml
+1. Imagens: .jpg, .png, .tiff
+2. Dados tabulares: .csv, .xlsx, .parquet
+3. Séries temporais: .npy, .hdf5
+4. Dados anotados: .json, .xml
 
 ### 🚧 Melhorias Futuras
-Suporte a carregamento em tempo real via streaming
-
-Integração com armazenamento em nuvem (AWS S3, Google Cloud, etc.)
-
-Aumento de dados (data augmentation) com técnicas avançadas
-
-Cache inteligente para acelerar a preparação dos lotes
+1. Suporte a carregamento em tempo real via streaming
+2. Integração com armazenamento em nuvem (AWS S3, Google Cloud, etc.)
+3. Aumento de dados (data augmentation) com técnicas avançadas
+4. Cache inteligente para acelerar a preparação dos lotes
