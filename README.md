@@ -59,7 +59,7 @@ O desenvolvimento do dataloader seguiu as seguintes etapas:
    Obs: neste ponto, tipicamente é interessante ter um conhecimento mais aprofundado dos dados e começar o desenvolvimento de uma EDA (Exploratory Data Analysis)
 
 2. **Construção da Pipeline de Pré-processamento**  
-   Definidas transformações a serem aplicadas, a construção de um pipeline (ex: [Scikit-Learn Pipeline](https://example.com)), incluindo normalizações, codificações, conversão de tipos, recorte de imagens, padronização de tamanho, etc.
+   Definidas transformações a serem aplicadas, a construção de um pipeline (ex: [Scikit-Learn Pipeline](https://scikit-learn.org/stable/modules/generated/sklearn.pipeline.Pipeline.html)), incluindo normalizações, codificações, conversão de tipos, recorte de imagens, padronização de tamanho, etc.
 
 3. **Implementação Modular**  
    Utilizando APIs do framework principal (ex.: `torch.utils.data.Dataset`), o dataloader deve ser estruturado para permitir:
@@ -113,7 +113,6 @@ Diferenciando-se das demais disciplinas do programa, este curso busca expor os a
 Além de fornecer uma base teórica sólida sobre os princípios matemáticos e computacionais que sustentam esses modelos, a disciplina incentivará a experimentação prática, análise crítica de publicações recentes e o desenvolvimento de projetos aplicados. Ao final do curso, espera-se que os alunos estejam capacitados a compreender o funcionamento interno desses modelos, avaliar suas vantagens e limitações, e aplicá-los de forma inovadora em suas respectivas áreas de pesquisa.
 
 #### KAN: Kolmogorov-Arnold Networks
-Referências: 
 1. [KAN: Kolmogorov-Arnold Networks (artigo base)](https://arxiv.org/abs/2404.19756)
 
 #### Diffusion Probabilistic Models
@@ -127,3 +126,5 @@ Referências:
 
 #### Neural Operators
 1. [DeepONet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators](https://arxiv.org/abs/1910.03193)
+
+### Trabalho Final
