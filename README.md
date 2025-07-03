@@ -55,23 +55,24 @@ O objetivo do dataloader é automatizar e otimizar o processo de ingestão de da
 O desenvolvimento do dataloader seguiu as seguintes etapas:
 
 1. **Análise Estrutural dos Dados**  
-   Foi feita uma análise dos formatos disponíveis (ex.: `.csv`, `.json`, `.jpg`, `.npy`), das variáveis envolvidas e da necessidade de tratamento de dados ausentes, normalização e categorização de rótulos.
+   Diferentes formatos devem ser contemplados durante o desenvolvimento (ex.: `.csv`, `.json`, `.jpg`, `.npy`). Além disso, variáveis envolvidas e a necessidade de tratamento de dados ausentes, normalização e categorização de alvos devem ser avaliadas.
+   Obs: neste ponto, tipicamente é interessante ter um conhecimento mais aprofundado dos dados e começar o desenvolvimento de uma EDA (Exploratory Data Analysis)
 
 2. **Construção da Pipeline de Pré-processamento**  
-   Foram definidas transformações aplicadas de forma automática, incluindo normalizações, codificações, conversão de tipos, recorte de imagens, padronização de tamanho, etc.
+   Definidas transformações a serem aplicadas, a construção de um pipeline (ex: [Scikit-Learn Pipeline](https://example.com)), incluindo normalizações, codificações, conversão de tipos, recorte de imagens, padronização de tamanho, etc.
 
 3. **Implementação Modular**  
-   Utilizando APIs do framework principal (ex.: `torch.utils.data.Dataset`), o dataloader foi estruturado para permitir:
+   Utilizando APIs do framework principal (ex.: `torch.utils.data.Dataset`), o dataloader deve ser estruturado para permitir:
    - Carregamento preguiçoso (*lazy loading*)
-   - Execução paralela via `num_workers`
-   - Amostragem estratificada
+   - Execução paralela via `num_workers` (paralelismo)
+   - Amostragem estratificada (implementação de processo de Validação Cruzada)
    - Configuração flexível por meio de arquivos `.yaml` ou `.json`
 
 4. **Testes e Verificações**  
-   Foram realizados testes automatizados e verificações manuais de integridade, incluindo distribuição de classes, consistência de rótulos e validação do pipeline de transformação.
+   O desenvolvimento deve contemplar testes automatizados e verificações manuais de integridade, incluindo distribuição de classes, consistência de rótulos e validação do pipeline de transformação.
 
 5. **Reprodutibilidade e Versionamento**  
-   Integração com ferramentas como DVC (Data Version Control) e controle de semente (`random seed`) para garantir a repetibilidade dos experimentos.
+   Integração com ferramentas como DVC (Data Version Control) e controle de semente (`random seed`) para garantir a reprodutibilidade dos experimentos.
 
 ### 💻 Exemplo de Uso
 
