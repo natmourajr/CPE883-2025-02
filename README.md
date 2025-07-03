@@ -91,7 +91,7 @@ loader = DataLoader(
     num_workers=4
 )
 
-
+```
 ### 📁 Formatos de Dados Suportados
 Imagens: .jpg, .png, .tif
 
