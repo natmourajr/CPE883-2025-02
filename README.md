@@ -91,3 +91,21 @@ loader = DataLoader(
     num_workers=4
 )
 
+
+### 📁 Formatos de Dados Suportados
+Imagens: .jpg, .png, .tif
+
+Dados tabulares: .csv, .xlsx, .parquet
+
+Séries temporais: .npy, .hdf5
+
+Dados anotados: .json, .xml
+
+### 🚧 Melhorias Futuras
+Suporte a carregamento em tempo real via streaming
+
+Integração com armazenamento em nuvem (AWS S3, Google Cloud, etc.)
+
+Aumento de dados (data augmentation) com técnicas avançadas
+
+Cache inteligente para acelerar a preparação dos lotes
