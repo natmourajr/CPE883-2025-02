@@ -1,5 +1,5 @@
 # CPE883-2025-02
-Repositório para ser utilizado para a disciplina do programa de engenharia elétrica da Coppe CPE883 Tópicos Especiais em Aprendizado De Máquina
+Repositório para ser utilizado para a disciplina do programa de engenharia elétrica da Coppe CPE883 Tópicos Especiais em Aprendizado De Máquina. Professor: Natanael Nunes de Moura Junior
 
 
 <!-- PROJECT SHIELDS -->
@@ -32,3 +32,8 @@ Repositório para ser utilizado para a disciplina do programa de engenharia elé
 [license-url]: https://github.com/natmourajr/CPE883-2025-02/blob/master/LICENSE.txt
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
 [linkedin-url]: www.linkedin.com/in/natanael-moura-junior-425a3294
+
+
+## Ementa do curso
+
+
