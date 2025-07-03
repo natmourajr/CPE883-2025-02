@@ -74,7 +74,7 @@ O desenvolvimento do dataloader seguiu as seguintes etapas:
 5. **Reprodutibilidade e Versionamento**  
    Integração com ferramentas como DVC (Data Version Control) e controle de semente (`random seed`) para garantir a reprodutibilidade dos experimentos.
 
-### 💻 Exemplo de Uso
+#### 💻 Exemplo de Uso
 
 ```python
 from dataloader import CustomDataset
@@ -92,14 +92,38 @@ loader = DataLoader(
 )
 
 ```
-### 📁 Formatos de Dados Suportados
+#### 📁 Formatos de Dados Suportados
 1. Imagens: .jpg, .png, .tiff
 2. Dados tabulares: .csv, .xlsx, .parquet
 3. Séries temporais: .npy, .hdf5
 4. Dados anotados: .json, .xml
 
-### 🚧 Melhorias Futuras
+#### 🚧 Melhorias Futuras
 1. Suporte a carregamento em tempo real via streaming
 2. Integração com armazenamento em nuvem (AWS S3, Google Cloud, etc.)
 3. Aumento de dados (data augmentation) com técnicas avançadas
 4. Cache inteligente para acelerar a preparação dos lotes
+
+### Modelos a serem estudados
+
+A rápida evolução das técnicas de aprendizado de máquina tem impulsionado avanços significativos em diversas áreas da engenharia, ciência e tecnologia. No entanto, muitos dos modelos mais recentes e inovadores ainda não foram plenamente incorporados às disciplinas tradicionais dos programas de pós-graduação, o que limita a formação de profissionais e pesquisadores frente ao estado da arte. Com base nessa lacuna, esta disciplina do Programa de Engenharia Elétrica da Coppe/UFRJ, no âmbito da área de Inteligência Computacional, tem por objetivo apresentar, discutir criticamente e aprofundar o estudo de modelos emergentes de aprendizado de máquina que representam as novas fronteiras do conhecimento e da pesquisa aplicada.
+
+Diferenciando-se das demais disciplinas do programa, este curso busca expor os alunos a abordagens contemporâneas que têm ganhado destaque na literatura científica internacional, mas que ainda são pouco exploradas no currículo regular. Entre os temas centrais estão os Kolmogorov-Arnold Networks (KAN), redes neurais baseadas em decomposição funcional e interpretabilidade; os Diffusion Probabilistic Models, que reformulam a geração de dados sintéticos por meio de processos estocásticos reversíveis; as Capsule Networks, que introduzem hierarquias estruturais para superar limitações de invariância em redes convolucionais tradicionais; os Attention Models, base conceitual para arquiteturas como os Transformers, com grande impacto em processamento de linguagem natural e visão computacional; e os Neural Operators (como os DeepONets), que representam uma nova classe de modelos capazes de aprender operadores em espaços funcionais, com aplicações promissoras em modelagem física e simulações científicas.
+
+Além de fornecer uma base teórica sólida sobre os princípios matemáticos e computacionais que sustentam esses modelos, a disciplina incentivará a experimentação prática, análise crítica de publicações recentes e o desenvolvimento de projetos aplicados. Ao final do curso, espera-se que os alunos estejam capacitados a compreender o funcionamento interno desses modelos, avaliar suas vantagens e limitações, e aplicá-los de forma inovadora em suas respectivas áreas de pesquisa.
+
+#### KAN: Kolmogorov-Arnold Networks
+Referências: 
+1. [KAN: Kolmogorov-Arnold Networks (artigo base)](https://arxiv.org/abs/2404.19756)
+
+#### Diffusion Probabilistic Models
+1. [Diffusion Probabilistic Models (artigo base)](https://arxiv.org/abs/2006.11239)
+
+#### Capsule Networks
+1. [Dynamic Routing Between Capsules](https://arxiv.org/abs/1710.09829v2)
+
+#### Attention Models
+1. [Attention Is All You Need](https://arxiv.org/abs/1706.03762)
+
+#### Neural Operators
+1. [DeepONet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators](https://arxiv.org/abs/1910.03193)
