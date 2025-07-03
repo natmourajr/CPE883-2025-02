@@ -37,3 +37,56 @@ Repositório para ser utilizado para a disciplina do programa de engenharia elé
 ## Ementa do curso
 
 
+### Pipeline de Carregamento de Dados (Dataloader)
+
+Este projeto conta com um módulo de **dataloader** desenvolvido para fornecer dados de forma eficiente, escalável e reprodutível aos modelos de aprendizado de máquina nas etapas de treinamento, validação e teste.
+
+#### 🔍 Objetivo
+
+O objetivo do dataloader é automatizar e otimizar o processo de ingestão de dados, garantindo:
+- Leitura eficiente de grandes volumes de dados
+- Pré-processamento em tempo real
+- Geração de lotes (batches) compatíveis com os frameworks de ML utilizados
+- Controle sobre a aleatoriedade e reprodutibilidade dos experimentos
+- Flexibilidade para diferentes formatos e tipos de dados (imagens, séries temporais, texto, etc.)
+
+#### 🛠️ Processo de Desenvolvimento
+
+O desenvolvimento do dataloader seguiu as seguintes etapas:
+
+1. **Análise Estrutural dos Dados**  
+   Foi feita uma análise dos formatos disponíveis (ex.: `.csv`, `.json`, `.jpg`, `.npy`), das variáveis envolvidas e da necessidade de tratamento de dados ausentes, normalização e categorização de rótulos.
+
+2. **Construção da Pipeline de Pré-processamento**  
+   Foram definidas transformações aplicadas de forma automática, incluindo normalizações, codificações, conversão de tipos, recorte de imagens, padronização de tamanho, etc.
+
+3. **Implementação Modular**  
+   Utilizando APIs do framework principal (ex.: `torch.utils.data.Dataset`), o dataloader foi estruturado para permitir:
+   - Carregamento preguiçoso (*lazy loading*)
+   - Execução paralela via `num_workers`
+   - Amostragem estratificada
+   - Configuração flexível por meio de arquivos `.yaml` ou `.json`
+
+4. **Testes e Verificações**  
+   Foram realizados testes automatizados e verificações manuais de integridade, incluindo distribuição de classes, consistência de rótulos e validação do pipeline de transformação.
+
+5. **Reprodutibilidade e Versionamento**  
+   Integração com ferramentas como DVC (Data Version Control) e controle de semente (`random seed`) para garantir a repetibilidade dos experimentos.
+
+### 💻 Exemplo de Uso
+
+```python
+from dataloader import CustomDataset
+from torch.utils.data import DataLoader
+
+dataset = CustomDataset(
+    data_dir="dados/imagens",
+    transform=transformacoes_padrao
+)
+loader = DataLoader(
+    dataset,
+    batch_size=32,
+    shuffle=True,
+    num_workers=4
+)
+
