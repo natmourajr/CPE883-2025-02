@@ -28,3 +28,7 @@ Repositório para ser utilizado para a disciplina do programa de engenharia elé
 [stars-url]: https://github.com/natmourajr/CPE883-2025-02/stargazers
 [issues-shield]: https://img.shields.io/github/issues/natmourajr/CPE883-2025-02.svg?style=for-the-badge
 [issues-url]: https://github.com/natmourajr/CPE883-2025-02/issues
+[license-shield]: https://img.shields.io/github/license/natmourajr/CPE883-2025-02.svg?style=for-the-badge
+[license-url]: https://github.com/natmourajr/CPE883-2025-02/blob/master/LICENSE.txt
+[linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
+[linkedin-url]: www.linkedin.com/in/natanael-moura-junior-425a3294
