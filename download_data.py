@@ -13,7 +13,6 @@ print("Iniciando o download do dataset para o cache do Kaggle...")
 
 try:
     # 2. Baixe o dataset sem especificar o 'path', e capture o caminho retornado
-    # Usando o identificador correto que descobrimos anteriormente.
     downloaded_path = kagglehub.dataset_download(
         "raddar/tuberculosis-chest-xrays-shenzhen"
     )
@@ -21,7 +20,7 @@ try:
     print(f"Download concluído em: {downloaded_path}")
     print(f"Movendo arquivos para o diretório de destino: {output_dir}")
 
-    # 3. Mova cada arquivo e pasta de dentro do diretório de download para o nosso diretório de destino
+    # 3. Move cada arquivo e pasta de dentro do diretório de download para o nosso diretório de destino
     for item in glob.glob(os.path.join(downloaded_path, '*')):
         shutil.move(item, output_dir)
 
