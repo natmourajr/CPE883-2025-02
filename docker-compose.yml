@@ -1,0 +1,13 @@
+# docker-compose.yml
+
+services:
+  dev-env:
+    build: .
+    container_name: cpe883-dev
+    volumes:
+      # Volume 1: Sincroniza todo o seu código do projeto
+      - .:/app
+      # Volume 2: Mapeia suas credenciais do Kaggle para dentro do container
+      - ~/.kaggle:/root/.kaggle
+    stdin_open: true
+    tty: true
