@@ -1,0 +1,15 @@
+# config.yaml
+
+dataset:
+  path: "data/images"
+  # Proporções para divisão em [treino, validação, teste]
+  split_ratios: [0.7, 0.15, 0.15]
+  # Semente aleatória para garantir que a divisão seja sempre a mesma
+  random_seed: 42
+
+training:
+  batch_size: 16
+  num_workers: 2
+
+model:
+  image_size: 224
