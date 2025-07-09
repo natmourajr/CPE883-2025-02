@@ -1,0 +1,13 @@
+name: cpe883-2025-02-kan-${PYTORCH_TAG}
+services:
+  lorenzetti:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PYTORCH_TAG: ${PYTORCH_TAG}
+    image: ${DOCKER_USERNAME}/kan:${PYTORCH_TAG}
+    container_name: cpe883-2025-02-kan-container-${TAG}
+    volumes:
+      - ../:/root/CPE883-2025-02
+    tty: true
