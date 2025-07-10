@@ -1,0 +1,11 @@
+datasets/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+env/
+.env/
+*.swp
+*.swo
+.DS_Store
