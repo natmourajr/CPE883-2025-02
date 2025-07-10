@@ -5,8 +5,6 @@ from pathlib import Path
 import random
 import json
 
-# parse args for each dataset
-
 PKL_DIR = Path(
     '../datasets/cifar-10-batches-py/')
 IMG_OUT_DIR = PKL_DIR / 'images'

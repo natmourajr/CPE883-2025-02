@@ -41,7 +41,6 @@ def main():
     print("Processing MNIST dataset...")
 
     os.makedirs(os.path.join(IMG_OUTPUT_DIR, "train"), exist_ok=True)
-    os.makedirs(os.path.join(IMG_OUTPUT_DIR, "val"), exist_ok=True)
     os.makedirs(os.path.join(IMG_OUTPUT_DIR, "test"), exist_ok=True)
 
     train_images = extract_images(os.path.join(
