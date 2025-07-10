@@ -18,3 +18,8 @@
             - train
         - test_annotations.txt --> img_name | class_id
         - train_annotations.txt
+
+## Sugestão do Natanael para datasets de desenvolvimento
+    Temporal → i3w,
+    Imagem → mnist
+    Tabular → Natanael fazer dados tabulares do sonar
