@@ -26,9 +26,11 @@ nvidia-nccl-cu12==2.26.2
 nvidia-nvjitlink-cu12==12.6.85
 nvidia-nvtx-cu12==12.6.77
 packaging==25.0
+pandas==2.3.0
 pillow==11.3.0
 pyparsing==3.2.3
 python-dateutil==2.9.0.post0
+pytz==2025.2
 scikit-learn==1.7.0
 scipy==1.16.0
 setuptools==80.9.0
@@ -39,3 +41,4 @@ torch==2.7.1
 torchvision==0.22.1
 triton==3.3.1
 typing_extensions==4.14.0
+tzdata==2025.2
