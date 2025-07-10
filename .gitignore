@@ -194,3 +194,4 @@ cython_debug/
 .cursorindexingignoredata/
 .vscode/
 data/
+download_data.py

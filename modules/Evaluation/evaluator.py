@@ -48,13 +48,13 @@ def run_kfold_evaluation_dry_run(model_class, model_name, config):
             print(f"  -> SUCESSO! Carregou um lote de validação com shape de imagens: {val_images.shape}")
         except Exception as e:
             print(f"  -> ERRO ao tentar carregar um lote de dados: {e}")
-            # Se der erro aqui, saberemos que o problema está no dataloader ou nos dados.
+            # Se der erro aqui, o problema está no dataloader ou nos dados.
         # --- FIM DO TESTE DE CARREGAMENTO ---
 
     print("-" * 50)
     print("Teste da estrutura K-Fold concluído com sucesso!")
     
-    # Retornamos um dicionário vazio pois não calculamos métricas
+    # Retorna um dicionário vazio pois não calcula métricas
     return {}
 
     # device define o dispositivo de hardware (CPU, cuda, se configurado)

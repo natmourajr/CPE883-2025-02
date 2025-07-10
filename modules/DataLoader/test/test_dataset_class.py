@@ -18,8 +18,6 @@ def load_config():
     Carrega o arquivo de configuração a partir de um caminho absoluto
     e conhecido dentro do container Docker.
     """
-    # O caminho para a raiz do projeto dentro do Docker é sempre /app
-    # O config.yaml está na raiz.
     config_path = '/app/config.yaml'
     
     try:
@@ -29,7 +27,7 @@ def load_config():
     except FileNotFoundError:
         print(f"\nERRO: Arquivo de configuração não encontrado em '{config_path}'!")
         print("Verifique se o arquivo 'config.yaml' realmente existe na raiz do seu projeto.")
-        sys.exit(1) # Para o script se não encontrar o arquivo
+        sys.exit(1)
 
 def main():
     """
@@ -53,7 +51,7 @@ def main():
         print("-> SUCESSO! Objeto TuberculosisDataset criado.")
     except Exception as e:
         print(f"-> FALHA ao criar o dataset: {e}")
-        return # Para o script se a criação falhar
+        return
 
     # 4. Verifica o tamanho total do dataset
     total_images = len(full_dataset)
