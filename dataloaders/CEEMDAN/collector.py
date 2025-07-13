@@ -12,7 +12,6 @@ copyright Copyright (c) 2025
 
 References:
 [1]
-
 """
 
 import pandas as pd
