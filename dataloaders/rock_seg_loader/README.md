@@ -62,3 +62,5 @@ for images, masks, amostras in dataloader:
     print(images.shape, masks.shape, amostras)
     break
 
+##✍️ Autoria
+Desenvolvido por Vivian de Carvalho Rodrigues como parte da disciplina CPE883 (UFOP) – Prof. Natanael Moraes Júnior.
