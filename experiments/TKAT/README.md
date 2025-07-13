@@ -2,7 +2,7 @@ This project uses the KAN algorithm from:
 
 - https://github.com/Adamdad/kat/tree/main
 
-So, its necessessary to follow the instalations:
+So, it's necessary to follow the installations:
 
 # install torch and other things
 pip install timm==1.0.3
