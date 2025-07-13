@@ -10,3 +10,7 @@ pip install wandb # I personally use wandb for results visualizations
 git clone https://github.com/Adamdad/rational_kat_cu.git
 cd rational_kat_cu
 pip install -e
+
+## Setup the enviroment
+pip install .[dev]    # Install requirements
+python -m build    # Build the project (.tar.gz and .whl)

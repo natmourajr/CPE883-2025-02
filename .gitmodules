@@ -1,0 +1,3 @@
+[submodule "experiments/TKAT/rational_kat_cu"]
+	path = experiments/TKAT/rational_kat_cu
+	url = https://github.com/Adamdad/kat.git
