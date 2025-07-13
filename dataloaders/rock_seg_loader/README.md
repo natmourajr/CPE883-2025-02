@@ -10,7 +10,7 @@ Este DataLoader foi desenvolvido como parte da disciplina *Tópicos Especiais em
 
 O diretório contendo os dados deve seguir a seguinte organização:
 
-2_Dataset/
+```Dataset/
 ├── DatasetA/
 │ ├── inputs/
 │ │ ├── sampleA0001.tiff
@@ -21,7 +21,7 @@ O diretório contendo os dados deve seguir a seguinte organização:
 ├── DatasetB/
 │ ├── inputs/
 │ └── masks/
-...
+...```
 
 
 Cada pasta representa uma amostra diferente (ex: `DatasetA`, `DatasetB`, ...), com subpastas `inputs/` (imagens) e `masks/` (máscaras multiclasse).
