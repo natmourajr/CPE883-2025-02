@@ -17,8 +17,8 @@ if [ -f "$FILENAME" ]; then
     
     rm "$FILENAME"
     
-    # echo "Running prepare_data.py..."
-    # python3 prepare_cifar.py
+    echo "Running prepare_heart.py..."
+    python3 prepare_heart.py
     
     echo "Done."
 else
