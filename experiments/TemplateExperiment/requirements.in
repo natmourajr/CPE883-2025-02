@@ -1,0 +1,8 @@
+# Direct dependencies
+typer>=0.16.0
+
+# Local editable dependencies
+-e ../../dataloaders/TemplateLoader
+
+# Current package in editable mode
+-e . 
