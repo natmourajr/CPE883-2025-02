@@ -15,79 +15,123 @@ copyright Copyright (c) 2025
 References:
 [1]
 """
-
-
+import os
+import sys
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import numpy as np
-from katransformer import KATransformer  # from https://github.com/Adamdad/kat
+import torch.nn.functional as F
+from timm.layers import PatchEmbed
+from typing import Union, Tuple
 
-# --- 1. Simulate toy time series ---
-batch_size = 16
-past_seq_len = 128
-forecast_len = 200
-patch_size = 16
+# Ajuste o caminho para a pasta 'kat' (onde está o katransformer.py)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'kat/')))
+from katransformer import KATVisionTransformer
 
-# Make synthetic training data: sine waves + noise
-t = np.linspace(0, 4 * np.pi, past_seq_len + forecast_len)
-series = np.sin(t)[None, :] + 0.1 * np.random.randn(batch_size, past_seq_len + forecast_len)
-
-x = torch.tensor(series[:, :past_seq_len], dtype=torch.float32)      # Input: past
-y = torch.tensor(series[:, past_seq_len:], dtype=torch.float32)      # Target: future
-
-# --- 2. Patchify input ---
-def patchify(x, patch_size):
-    B, L = x.shape
-    newL = L // patch_size
-    x = x[:, :newL * patch_size]
-    return x.view(B, newL, patch_size)
-
-x_patches = patchify(x, patch_size)  # shape: (B, num_patches, patch_size)
-
-# --- 3. Define modified KAT model ---
-class TimeSeriesKAT(nn.Module):
-    def __init__(self, patch_size, num_patches, forecast_len, embed_dim=64):
+# PatchEmbed1D para série temporal
+class PatchEmbed1D(nn.Module):
+    def __init__(self, img_size=None, patch_size=16, embed_dim=128, **kwargs):
         super().__init__()
-        self.kat = KATransformer(
-            seq_len=patch_size,
-            num_layers=4,
-            num_heads=4,
-            embed_dim=embed_dim,
-        )
-        self.head = nn.Sequential(
-            nn.Flatten(),  # shape: (B, num_patches * embed_dim)
-            nn.Linear(num_patches * embed_dim, forecast_len)
-        )
-
-    def forward(self, x):
-        x = self.kat(x)          # (B, num_patches, embed_dim)
-        x = self.head(x)         # (B, forecast_len)
+        if isinstance(img_size, tuple):
+            seq_len = img_size[0]  # caso seja tupla, pega o primeiro
+        else:
+            seq_len = img_size or 128
+        self.seq_len = seq_len
+        self.patch_size = patch_size
+        self.num_patches = seq_len // patch_size
+        self.proj = nn.Conv1d(1, embed_dim, kernel_size=patch_size, stride=patch_size)
+        
+    def forward(self, x):  # x shape: (B, seq_len, 1)
+        x = x.transpose(1, 2)  # (B, 1, seq_len)
+        x = self.proj(x)       # (B, embed_dim, num_patches)
+        x = x.transpose(1, 2)  # (B, num_patches, embed_dim)
         return x
 
-model = TimeSeriesKAT(
-    patch_size=patch_size,
-    num_patches=past_seq_len // patch_size,
-    forecast_len=forecast_len,
-    embed_dim=64
-).to('cuda' if torch.cuda.is_available() else 'cpu')
+# Subclasse para adaptar o KATVisionTransformer
+class KATTimeSeriesTransformer(KATVisionTransformer):
+    def __init__(self, seq_len, patch_size, embed_dim=128, depth=6, num_heads=4, num_classes=1):
+        super().__init__(
+            img_size=seq_len,
+            patch_size=patch_size,
+            in_chans=1,
+            num_classes=num_classes,
+            embed_dim=embed_dim,
+            depth=depth,
+            num_heads=num_heads,
+            embed_layer=PatchEmbed1D,
+        )
 
-# --- 4. Training loop ---
+# --- Criar dados sintéticos ---
+
+def create_sin_data(batch_size, seq_len, forecast_len):
+    t = torch.linspace(0, 8 * 3.1416, seq_len + forecast_len)
+    series = torch.sin(t).unsqueeze(0).repeat(batch_size, 1)
+    noise = 0.1 * torch.randn_like(series)
+    data = series + noise
+    x = data[:, :seq_len].unsqueeze(-1)    # (batch_size, seq_len, 1)
+    y = data[:, seq_len:].unsqueeze(-1)    # (batch_size, forecast_len, 1)
+    return x, y
+
+# --- Treinamento simples ---
+
+seq_len = 128
+patch_size = 16
+forecast_len = 32
+batch_size = 16
+model = KATTimeSeriesTransformer(seq_len=seq_len, patch_size=patch_size, num_classes=forecast_len)
+model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
+
+criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-loss_fn = nn.MSELoss()
-device = model.head[1].weight.device
 
-for epoch in range(20):
-    model.train()
-    pred = model(x_patches.to(device))  # shape: (B, 200)
-    loss = loss_fn(pred, y.to(device))
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    if epoch % 5 == 0:
-        print(f"Epoch {epoch}: Loss = {loss.item():.4f}")
+x_train, y_train = create_sin_data(256, seq_len, forecast_len)
+train_loader = torch.utils.data.DataLoader(
+    torch.utils.data.TensorDataset(x_train, y_train),
+    batch_size=batch_size,
+    shuffle=True,
+)
 
-# --- 5. Forecast on new input ---
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+model.train()
+for epoch in range(10):
+    total_loss = 0
+    for xb, yb in train_loader:
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad()
+        output = model(xb)  # output shape: (B, forecast_len)
+        loss = criterion(output, yb.squeeze(-1))  # ajustar para sequência
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * xb.size(0)
+    print(f"Epoch {epoch+1}: Loss {total_loss/len(train_loader.dataset):.6f}")
+
+
+
+# --- Avaliação e previsão direta de sequência ---
 model.eval()
 with torch.no_grad():
-    future = model(x_patches[:1].to(device))  # shape: (1, 200)
-    print("Forecasted shape:", future.shape)
+    x_test, y_test = create_sin_data(1, seq_len, forecast_len)
+    x_test = x_test.to(device)
+    
+    pred_seq = model(x_test)  # (1, forecast_len)
+    pred_seq = pred_seq.squeeze(0).cpu().numpy()
+    true_seq = y_test.squeeze(0).squeeze(-1).numpy()
+
+    print("\nSequência prevista:")
+    print(pred_seq)
+
+    print("\nSequência real:")
+    print(true_seq)
+
+
+# Plot
+plt.figure(figsize=(10, 4))
+plt.plot(true_seq, label='Real', marker='o')
+plt.plot(pred_seq, label='Previsto', marker='x')
+plt.title("Previsão da Série Temporal (TKAT)")
+plt.xlabel("Passo de tempo")
+plt.ylabel("Valor")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
