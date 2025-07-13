@@ -1,0 +1,14 @@
+[project]
+name = "tfrecord_loader"
+version = "0.1.0"
+description = "Template for loading tfrecord files in a machine learning project."
+readme = "README.md"
+requires-python = ">=3.11.13"
+dependencies = [
+    "tensorflow",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+]
