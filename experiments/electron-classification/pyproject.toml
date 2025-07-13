@@ -17,4 +17,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-tfrecord-loader = { path = "../../dataloaders/tfrecord-loader" }
+tfrecord-loader = { path = "../../dataloaders/tfrecord-loader", editable = true }

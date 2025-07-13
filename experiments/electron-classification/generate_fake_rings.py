@@ -2,7 +2,7 @@ from electron_classification.data_faker import DataFaker
 from argparse import ArgumentParser
 from pathlib import Path
 
-from electron_classification import tfrecord
+from tfrecord_loader import generator_to_tfrecord
 
 N_RINGS = 100
 
@@ -57,7 +57,7 @@ def main(
     # df = data_faker.generate(n)
     # df.to_parquet(output_file, index=False)
 
-    tfrecord.generator_to_tfrecord(
+    generator_to_tfrecord(
         generator=data_faker.generator(n),
         output_file=output_file,
         schema=data_faker.tfrecord_schema

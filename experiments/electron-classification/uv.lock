@@ -67,7 +67,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "pandas", specifier = ">=2.3.1" },
-    { name = "tfrecord-loader", virtual = "../../dataloaders/tfrecord-loader" },
+    { name = "tfrecord-loader", editable = "../../dataloaders/tfrecord-loader" },
 ]
 
 [[package]]
@@ -511,7 +511,7 @@ wheels = [
 [[package]]
 name = "tfrecord-loader"
 version = "0.1.0"
-source = { virtual = "../../dataloaders/tfrecord-loader" }
+source = { editable = "../../dataloaders/tfrecord-loader" }
 dependencies = [
     { name = "tensorflow" },
 ]
