@@ -5,6 +5,7 @@ description = "Code for classifying electorns in a particle physics experiment."
 readme = "README.md"
 requires-python = "==3.11.13"
 dependencies = [
+    "pandas>=2.3.1",
     "tfrecord-loader",
 ]
 
@@ -16,4 +17,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-electron-classification = { path = "../../dataloaders/tfrecord-loader", editable = true }
+tfrecord-loader = { path = "../../dataloaders/tfrecord-loader" }

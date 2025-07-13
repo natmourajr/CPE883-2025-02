@@ -4,7 +4,12 @@ import pandas as pd
 import numpy as np
 import numpy.typing as npt
 
-from . import tfrecord
+from tfrecord_loader import (
+    float_feature,
+    int64_feature,
+    TFRecordSchema,
+    TFRecordGenerator
+)
 
 SchemaDict = Dict[str, Tuple[str, Dict[str, Any]]]
 
@@ -19,30 +24,30 @@ class DataFaker:
         self.generators = {
             'gaussian': {
                 'generator': self.normal,
-                'tf_feature': tfrecord.float_feature
+                'tf_feature': float_feature
             },
             'normal': {
                 'generator': self.normal,
-                'tf_feature': tfrecord.float_feature
+                'tf_feature': float_feature
             },
             'uniform': {
                 'generator': self.uniform,
-                'tf_feature': tfrecord.float_feature
+                'tf_feature': float_feature
             },
-            # Choice doesn work properly with tfrecord.bytes_feature
+            # Choice doesn't work properly with bytes_feature
             # should implement type checks to select the right feature type
             'choice': {
                 'generator': self.choice,
-                'tf_feature': tfrecord.int64_feature
+                'tf_feature': int64_feature
             },
             'sequential': {
                 'generator': self.sequential,
-                'tf_feature': tfrecord.int64_feature
+                'tf_feature': int64_feature
             }
         }
 
     @cached_property
-    def tfrecord_schema(self) -> tfrecord.TFRecordSchema:
+    def tfrecord_schema(self) -> TFRecordSchema:
         """
         Returns the schema for TFRecord serialization.
         """
@@ -63,7 +68,7 @@ class DataFaker:
         }
         return pd.DataFrame.from_dict(generated_data)
 
-    def generator(self, n: int) -> tfrecord.TFRecordGenerator:
+    def generator(self, n: int) -> TFRecordGenerator:
         for _ in range(n):
             yield {
                 column: self.generators[generator_name]['generator'](

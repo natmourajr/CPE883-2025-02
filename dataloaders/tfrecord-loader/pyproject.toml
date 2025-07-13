@@ -1,5 +1,5 @@
 [project]
-name = "tfrecord_loader"
+name = "tfrecord-loader"
 version = "0.1.0"
 description = "Template for loading tfrecord files in a machine learning project."
 readme = "README.md"
