@@ -1,4 +1,4 @@
-This project uses KAN algorith from:
+This project uses the KAN algorithm from:
 
 - https://github.com/Adamdad/kat/tree/main
 
