@@ -1,5 +1,5 @@
 [project]
-name = "Dataloaders"
+name = "dataloaders"
 version = "0.1.0"
 description = "Python package and scripts with useful dataloaders"
 readme = "README.md"
@@ -19,4 +19,6 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = [
     "MNIST_dataloaders",
+    "Heart_dataloaders",
+    "TemplateLoader",
 ]

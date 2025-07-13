@@ -1,0 +1,11 @@
+[project]
+name = "my_project"
+version = "0.1.0"
+dependencies = []
+
+[tool.setuptools]
+packages = ["dataloaders", "models"] 
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
