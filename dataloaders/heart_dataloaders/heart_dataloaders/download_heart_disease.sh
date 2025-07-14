@@ -1,7 +1,7 @@
 #!/bin/bash
 
 URL="https://archive.ics.uci.edu/static/public/45/heart+disease.zip"
-TARGET_DIR="../datasets/"
+TARGET_DIR="../../../datasets/"
 FILE_TO_EXTRACT="processed.cleveland.data" 
 
 mkdir -p "$TARGET_DIR"

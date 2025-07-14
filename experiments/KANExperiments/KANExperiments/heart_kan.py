@@ -3,9 +3,10 @@ from pathlib import Path
 import torch
 from kan import *
 from sklearn.metrics import accuracy_score
-from dataloaders import HeartDataset
+# from heart_dataloaders import HeartDataset
 from sklearn.model_selection import KFold
 import numpy as np
+from heart_dataloaders import HeartDataset
 
 
 def parse_args():
@@ -13,7 +14,7 @@ def parse_args():
         description="Train KAN model on Heart Disease dataset")
     parser.add_argument("--data_path",
                         type=str,
-                        default="",
+                        default="/home/eduardo/doc/CPE883-2025-02/datasets/heart_disease/full/heart_disease.csv",
                         help="Path to heart disease dataset CSV file")
     parser.add_argument("--batch_size",
                         type=int,

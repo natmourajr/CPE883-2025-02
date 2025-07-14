@@ -1,4 +1,4 @@
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import LabelEncoder
 import pandas as pd
 import os
 from sklearn.model_selection import train_test_split
@@ -9,7 +9,7 @@ COLUMNS = [
     "thalach", "exang", "oldpeak", "slope", "ca", "thal", "target"
 ]
 
-OUTPUT_DIR = "../datasets/heart_disease/"
+OUTPUT_DIR = "../../../datasets/heart_disease/"
 
 # replace missing '?' with NaN
 data = pd.read_csv(
@@ -23,12 +23,10 @@ data = pd.read_csv(
 data = data.dropna(axis=0)
 
 
-label_encoder = LabelEncoder()
-
 # Convert all object (string) type columns to numeric using LabelEncoder
+label_encoder = LabelEncoder()
 for col in data.select_dtypes(include=['object']).columns:
     data[col] = label_encoder.fit_transform(data[col].astype(str))
-    print(f"✅ Encoded column: {col}")
 
 os.makedirs(os.path.join(OUTPUT_DIR, "train"), exist_ok=True)
 os.makedirs(os.path.join(OUTPUT_DIR, "test"), exist_ok=True)

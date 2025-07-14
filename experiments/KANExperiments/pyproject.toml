@@ -1,8 +1,7 @@
 [project]
-name = "Models"
+name = "KANExperiments"
 version = "0.1.0"
-description = "Python package and scripts with useful models"
-readme = "README.md"
+description = "code for experiments with KAN"
 requires-python = ">=3.10,<=3.13.3"
 dependencies = [
     "numpy>=2.2.5",
@@ -15,8 +14,3 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-packages = [
-    "KAN",
-]
