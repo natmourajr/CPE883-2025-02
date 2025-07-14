@@ -1,0 +1,16 @@
+[project]
+name = "heart_dataloaders"
+version = "0.1.0"
+description = "Python package and scripts with heart_disease dataloader"
+requires-python = ">=3.10,<=3.13.3"
+dependencies = [
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "pillow>=11.2.1",
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+]
+
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
