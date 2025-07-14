@@ -10,6 +10,7 @@ dependencies = [
     "tfrecord-loader",
     "torch==2.7.1",
     "typer>=0.16.0",
+    "classification-kan"
 ]
 
 [project.scripts]
@@ -21,3 +22,4 @@ build-backend = "hatchling.build"
 
 [tool.uv.sources]
 tfrecord-loader = { path = "../../dataloaders/tfrecord-loader", editable = true }
+classification-kan = { path = "../../models/classification-kan", editable = true }
