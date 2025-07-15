@@ -11,7 +11,7 @@ app = typer.Typer()
 
 @app.command()
 def train(
-    data_dir: str = typer.Option(r"E:\back_up_DOUTORADO\4_CPE883_ML2_2p\2_Dataset\mini_dataset", help="Caminho para o dataset"),
+    data_dir: str = typer.Option(r"...\mini_dataset", help="Caminho para o dataset"),
     epochs: int = 10,
     batch_size: int = 4,
     lr: float = 1e-3
