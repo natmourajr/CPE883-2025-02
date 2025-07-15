@@ -1,6 +1,6 @@
 # 🧪 Experimento: CKAN Simple (Classificação Global)
 
-Este experimento implementa um pipeline de teste para classificação global de imagens de microtomografia de rochas. A arquitetura é inspirada na CKAN (Kolmogorov–Arnold Network), mas neste estágio inicial utiliza ReLU no lugar de camadas spline.
+Este experimento implementa uma pipeline de teste para classificação global de imagens de microtomografia de rochas. A arquitetura é inspirada na CKAN (Kolmogorov–Arnold Network), mas neste estágio inicial utiliza ReLU no lugar de camadas spline.
 
 ## 📦 Estrutura
 
