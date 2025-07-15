@@ -1,0 +1,5 @@
+[project]
+name = "rock_seg_loader"
+version = "0.1.0"
+description = "Dataloader para segmentação de imagens de microtomografia de rochas"
+requires-python = ">=3.10"
