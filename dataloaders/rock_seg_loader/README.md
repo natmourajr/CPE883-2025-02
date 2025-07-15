@@ -65,5 +65,6 @@ for images, masks, amostras in dataloader:
     break
 ```
 
-##✍️ Autoria
+## ✍️ Autoria
+
 Desenvolvido por Vivian de Carvalho Rodrigues como parte da disciplina CPE883 (UFOP) – Prof. Natanael Moraes Júnior.
