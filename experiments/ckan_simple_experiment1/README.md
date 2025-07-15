@@ -6,7 +6,7 @@ Este experimento implementa uma pipeline de teste para classificação global de
 
 - `rock_class_loader/`: contém o `RockSegmentationDatasetMulti` adaptado para retornar a classe dominante da máscara.
 - `ckan_simple_experiment1/cli.py`: script principal com `typer` para treinamento.
-- `mini_dataset.zip`: conjunto reduzido de 40 imagens para teste local.
+- `mini_dataset.zip`: conjunto reduzido de 16 imagens para teste local.
 - `pyproject.toml`: dependências e instalação com `uv` ou `pip install -e .`.
 
 ## 📈 Arquitetura do modelo
