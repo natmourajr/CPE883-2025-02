@@ -18,11 +18,19 @@ References:
 import os
 import sys
 import matplotlib.pyplot as plt
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from timm.layers import PatchEmbed
 from typing import Union, Tuple
+
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+from dataloaders.benchmark.collector import Collector3W
 
 # Ajuste o caminho para a pasta 'kat' (onde está o katransformer.py)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'kat/')))
@@ -66,17 +74,57 @@ class KATTimeSeriesTransformer(KATVisionTransformer):
 def create_sin_data(batch_size, seq_len, forecast_len):
     t = torch.linspace(0, 8 * 3.1416, seq_len + forecast_len)
     series = torch.sin(t).unsqueeze(0).repeat(batch_size, 1)
-    noise = 0.1 * torch.randn_like(series)
+    noise = 0.5 * torch.randn_like(series)
     data = series + noise
     x = data[:, :seq_len].unsqueeze(-1)    # (batch_size, seq_len, 1)
     y = data[:, seq_len:].unsqueeze(-1)    # (batch_size, forecast_len, 1)
+    # import ipdb
+    # ipdb.set_trace()
     return x, y
+
+def prepare_data(batch_size, seq_len, forecast_len):
+
+    # TODO: Trocar pelos valores reais
+    # Série de dados com dadas e valores.
+    date_range = pd.date_range(start="2023-01-01", periods=seq_len + forecast_len, freq="D")
+    values = pd.Series(50 + 10 * torch.randn(seq_len + forecast_len).numpy(), index=date_range)
+
+    # Convertendo valores para tensor (normalmente valores já estão normalizados)
+    data = torch.tensor(values.values, dtype=torch.float32).unsqueeze(0).repeat(batch_size, 1)  # (batch_size, total_len)
+
+    # Separando entrada (x) e futuro (y)
+    x = data[:, :seq_len].unsqueeze(-1)        # (batch_size, seq_len, 1)
+    y = data[:, seq_len:].unsqueeze(-1)        # (batch_size, forecast_len, 1)
+
+    return x, y
+
+def get_3w_data():
+
+    dataset = Collector3W(data_path='3w_dataset/data', undesirable_event_code=1, train=True)
+
+    loader = DataLoader(dataset, batch_size=16, shuffle=True)
+
+    import ipdb
+    ipdb.set_trace()
+
+def compute_mse_torch(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
+    """
+    Compute Mean Squared Error (MSE) between true and predicted tensors.
+    
+    Args:
+        y_true (torch.Tensor): Ground truth values.
+        y_pred (torch.Tensor): Predicted values.
+    
+    Returns:
+        float: MSE value.
+    """
+    return torch.mean((y_true - y_pred) ** 2).item()
 
 # --- Treinamento simples ---
 
 seq_len = 128
 patch_size = 16
-forecast_len = 32
+forecast_len = 64
 batch_size = 16
 model = KATTimeSeriesTransformer(seq_len=seq_len, patch_size=patch_size, num_classes=forecast_len)
 model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
@@ -84,7 +132,19 @@ model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
 criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+# Using a sine series
 x_train, y_train = create_sin_data(256, seq_len, forecast_len)
+# Using a mock series with data/values
+# x_train, y_train = prepare_data(256, seq_len, forecast_len)
+
+# Standardize the data
+mean = x_train.mean()
+std = x_train.std()
+
+x_train = (x_train - mean) / std
+y_train = (y_train - mean) / std
+
+
 train_loader = torch.utils.data.DataLoader(
     torch.utils.data.TensorDataset(x_train, y_train),
     batch_size=batch_size,
@@ -110,10 +170,16 @@ for epoch in range(10):
 # --- Avaliação e previsão direta de sequência ---
 model.eval()
 with torch.no_grad():
-    x_test, y_test = create_sin_data(1, seq_len, forecast_len)
-    x_test = x_test.to(device)
+    t, y_test = create_sin_data(1, seq_len, forecast_len)
     
-    pred_seq = model(x_test)  # (1, forecast_len)
+    # Standardize the data
+    t = (t - mean) / std
+
+    t = t.to(device)
+
+    pred_seq = model(t)  # (1, forecast_len)
+
+    pred_seq = pred_seq * std + mean
     pred_seq = pred_seq.squeeze(0).cpu().numpy()
     true_seq = y_test.squeeze(0).squeeze(-1).numpy()
 
@@ -123,14 +189,21 @@ with torch.no_grad():
     print("\nSequência real:")
     print(true_seq)
 
+    mse = compute_mse_torch(torch.tensor(true_seq), torch.tensor(pred_seq))
+    print(f"MSE: {mse:.6f}")
+
 
 # Plot
-plt.figure(figsize=(10, 4))
+fontsize=18
+plt.rcParams.update({
+    "font.size": fontsize,              # tamanho padrão
+})
+plt.figure(figsize=(12, 6))
 plt.plot(true_seq, label='Real', marker='o')
 plt.plot(pred_seq, label='Previsto', marker='x')
-plt.title("Previsão da Série Temporal (TKAT)")
-plt.xlabel("Passo de tempo")
-plt.ylabel("Valor")
+plt.title("Previsão da Série Temporal (TKAT)", fontsize=fontsize)
+plt.xlabel("Passo de tempo", fontsize=fontsize)
+plt.ylabel("Valor", fontsize=fontsize)
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
