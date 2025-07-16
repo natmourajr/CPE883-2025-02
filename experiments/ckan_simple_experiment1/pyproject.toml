@@ -1,0 +1,21 @@
+[project]
+name = "ckan-simple-experiment1"
+version = "0.1.0"
+description = "Experimento inicial com 'CKAN' simulada para classificação global de imagens de rochas"
+authors = [
+    { name="Vivian de Carvalho Rodrigues" }
+]
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    "torch",
+    "typer>=0.9",
+    "matplotlib",
+    "scikit-image",
+    "imageio"
+]
+
+[project.scripts]
+ckan-simple = "ckan_simple_experiment1.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]

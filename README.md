@@ -114,6 +114,15 @@ Além de fornecer uma base teórica sólida sobre os princípios matemáticos e 
 
 #### KAN: Kolmogorov-Arnold Networks
 1. [KAN: Kolmogorov-Arnold Networks (artigo base)](https://arxiv.org/abs/2404.19756)
+2. [A Survey on Kolmogorov-Arnold Network](https://arxiv.org/abs/2411.06078)
+3. [Convolutional Kolmogorov-Arnold Networks](https://arxiv.org/abs/2406.13155)
+4. [KAN-ODEs: Kolmogorov–Arnold network ordinary differential equations for learning dynamical systems and hidden physics](https://www.sciencedirect.com/science/article/pii/S0045782524006522)
+5. [Kolmogorov-Arnold Graph Neural Networks](https://arxiv.org/abs/2406.18354)
+6. [Kolmogorov-Arnold Networks (KANs) for Time Series Analysis](https://arxiv.org/abs/2405.08790)
+7. [Kolmogorov-Arnold Networks are Radial Basis Function Networks](https://arxiv.org/abs/2405.06721)
+8. [Kolmogorov-Arnold Transformer](https://arxiv.org/abs/2409.10594)
+9. [seqKAN: Sequence processing with Kolmogorov-Arnold Networks](https://arxiv.org/abs/2502.14681)
+10. [TKAN: Temporal Kolmogorov-Arnold Networks](https://arxiv.org/abs/2405.07344)
 
 #### Diffusion Probabilistic Models
 1. [Diffusion Probabilistic Models (artigo base)](https://arxiv.org/abs/2006.11239)

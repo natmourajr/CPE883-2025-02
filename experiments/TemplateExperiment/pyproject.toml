@@ -1,0 +1,20 @@
+[project]
+name = "template_experiment"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.13.*"
+dependencies = [
+    "template-loader",
+    "typer>=0.16.0",
+]
+
+[project.scripts]
+template-experiment = "template_experiment.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+template-loader = { path = "../../dataloaders/TemplateLoader", editable = true }
