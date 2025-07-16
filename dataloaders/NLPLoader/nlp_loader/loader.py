@@ -7,7 +7,7 @@ import torch
 import requests
 
 class NLPDataLoader:
-    def __init__(self, tokenizer, block_size, dataset_name='shakespeare', split_ratio={"train":0.9,"val":0.1,"test":0.0}, retokenize=True):
+    def __init__(self, tokenizer, block_size, model = "gpt", dataset_name='shakespeare', split_ratio={"train":0.9,"val":0.1,"test":0.0}, retokenize=True):
         # TODO maybe I should allow the user to specify the data_dir
         self.data_dir = self.get_data_dir()
         self.dataset = {}
@@ -22,7 +22,14 @@ class NLPDataLoader:
 
         for split in split_ratio.keys():
             if split_ratio[split] > 0.0:
-                self.dataset[split] = NLPDataset(
+                if model == "gpt":
+                    self.dataset[split] = GPTDataset(
+                        split,
+                        block_size,
+                        self.data_dir,
+                    )
+                elif model == "bert":
+                    self.dataset[split] = BERTDataset(
                     split,
                     block_size,
                     self.data_dir,
@@ -149,7 +156,7 @@ class NLPDataLoader:
         return out_dir
 
 
-class NLPDataset(Dataset):
+class GPTDataset(Dataset):
     def __init__(self, split, block_size, token_dir):
         self.block_size = block_size
 
@@ -167,9 +174,32 @@ class NLPDataset(Dataset):
     def __getitem__(self, idx):
         chunk = self.data[idx : idx + self.block_size + 1]
         x = torch.from_numpy(chunk[:-1].astype(np.int64))
+        y = torch.from_numpy(chunk[1:].astype(np.int64))
+
+        return x, y
+
+class BERTDataset(Dataset):
+    def __init__(self, split, block_size, token_dir):
+        self.block_size = block_size
+
+        self.data = np.memmap(
+            os.path.join(token_dir, f"{split}.bin"),
+            dtype=np.uint16,
+            mode='r'
+        )
+
+        self.length = len(self.data) - block_size
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        chunk = self.data[idx : idx + self.block_size]
+        x = torch.from_numpy(chunk.astype(np.int64))
+        y = x.clone()
         #y = torch.from_numpy(chunk[1:].astype(np.int64))
 
-        return x
+        return x, y
 
 
 
