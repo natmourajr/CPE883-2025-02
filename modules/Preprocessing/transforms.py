@@ -20,7 +20,7 @@ def get_image_transforms(image_size=224, is_train=False):
     imagenet_std = [0.229, 0.224, 0.225]
 
     if is_train:
-        # Para treinamento, adicionamos Data Augmentation para tornar o modelo mais robusto
+        # Para treinamento, adiciona Data Augmentation para tornar o modelo mais robusto
         # Ex: Rotações aleatórias, inversões horizontais, etc.
         transform_pipeline = transforms.Compose([
             transforms.Resize((image_size, image_size)),
@@ -30,8 +30,8 @@ def get_image_transforms(image_size=224, is_train=False):
             transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
         ])
     else:
-        # Para validação e teste, não usamos data augmentation.
-        # Apenas redimensionamos, convertemos para tensor e normalizamos.
+        # Para validação e teste, não usa data augmentation.
+        # Apenas redimensiona, converte para tensor e normaliza.
         transform_pipeline = transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),

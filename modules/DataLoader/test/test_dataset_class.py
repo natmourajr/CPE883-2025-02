@@ -26,7 +26,7 @@ def load_config():
             return yaml.safe_load(file)
     except FileNotFoundError:
         print(f"\nERRO: Arquivo de configuração não encontrado em '{config_path}'!")
-        print("Verifique se o arquivo 'config.yaml' realmente existe na raiz do seu projeto.")
+        print("Verifique se o arquivo 'config.yaml' realmente existe na raiz do projeto.")
         sys.exit(1)
 
 def main():

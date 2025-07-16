@@ -27,7 +27,7 @@ try:
     print("Arquivos movidos com sucesso!")
 
 finally:
-    # 4. (Opcional, mas boa prática) Limpa o diretório de cache agora que está vazio
+    # 4. (Opcional) Limpa o diretório de cache agora que está vazio
     # para não deixar lixo no sistema de arquivos do container.
     if 'downloaded_path' in locals() and os.path.exists(downloaded_path):
         # A pasta pai também pode ser removida para uma limpeza completa.

@@ -15,16 +15,7 @@ from modules.Evaluation.evaluator import run_kfold_evaluation
 # DEFINA A ARQUITETURACAPSNET AQUI
 # Por enquanto, um esqueleto simples para teste.
 # ============================================================
-class CapsNet(nn.Module):
-    def __init__(self, num_classes=2):
-        super(CapsNet, self).__init__()
-        # Substituir este código pela arquitetura CapsNet real
-        self.flatten = nn.Flatten()
-        self.fc = nn.Linear(3 * 224 * 224, num_classes)
-        print("Modelo CapsNet de Exemplo Inicializado!")
-
-    def forward(self, x):
-        return self.fc(self.flatten(x))
+# Adicionar a este código o módulo com a arquitetura CapsNet real
 # ============================================================
 
 def load_config():
