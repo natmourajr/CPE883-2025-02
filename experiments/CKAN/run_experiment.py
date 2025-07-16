@@ -2,21 +2,14 @@
 
 import yaml
 import torch
-import torch.nn as nn
 import sys
 import os
 
 # Adiciona o diretório raiz do projeto ao path do Python para encontrar os módulos
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..',)))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-
-# ============================================================
-# DEFINA A ARQUITETURA CKAN AQUI
-# Por enquanto, um esqueleto simples para teste.
-# ============================================================
-# Adicionar a este código o módulo com a arquitetura CKAN real
-# ============================================================
+from modules.models.CKAN.ckan import CKAN
 
 def load_config():
     """Carrega o arquivo de configuração da raiz do projeto."""
@@ -37,7 +30,7 @@ def main():
         model_class=CKAN, 
         model_name="CKAN", 
         config=config,
-        device="cuda"
+        device="cpu"
     )
 
 if __name__ == '__main__':

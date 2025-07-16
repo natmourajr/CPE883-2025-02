@@ -30,7 +30,7 @@ def get_image_transforms(image_size=224, is_train=False):
             transforms.Normalize(mean=imagenet_mean, std=imagenet_std)
         ])
     else:
-        # Para validação e teste, não usa data augmentation.
+        # Para validação e teste, não usadata augmentation.
         # Apenas redimensiona, converte para tensor e normaliza.
         transform_pipeline = transforms.Compose([
             transforms.Resize((image_size, image_size)),
