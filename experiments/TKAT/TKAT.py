@@ -22,8 +22,15 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from timm.layers import PatchEmbed
 from typing import Union, Tuple
+
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+from dataloaders.benchmark.collector import Collector3W
 
 # Ajuste o caminho para a pasta 'kat' (onde está o katransformer.py)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'kat/')))
@@ -91,6 +98,14 @@ def prepare_data(batch_size, seq_len, forecast_len):
 
     return x, y
 
+def get_3w_data():
+
+    dataset = Collector3W(data_path='3w_dataset/data', undesirable_event_code=1, train=True)
+
+    loader = DataLoader(dataset, batch_size=16, shuffle=True)
+
+    import ipdb
+    ipdb.set_trace()
 
 def compute_mse_torch(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
     """
