@@ -1,7 +1,7 @@
 # https://www.tensorflow.org/tutorials/load_data/tfrecord?hl=pt-br#tftrainexample
 
 from pathlib import Path
-from typing import Any, Dict, Generator, Callable
+from typing import Any, Dict, Generator, Callable, Tuple
 
 import tensorflow as tf
 
@@ -112,3 +112,25 @@ RINGS_SCHEMA = {
 }
 for i in range(N_RINGS):
     RINGS_SCHEMA[f'ring_{i}'] = tf.io.FixedLenFeature([], tf.float32)
+
+
+def parse_serialized_rings(serialized_example: tf.Tensor) -> Tuple[tf.Tensor, float]:
+    """
+    Parses a serialized TFRecord example into a dictionary of tensors.
+
+    Parameters
+    ----------
+    serialized_example : tf.Tensor
+        A serialized TFRecord example.
+
+    Returns
+    -------
+    Tuple[tf.Tensor, float]
+        A tuple containing a tensor of concatenated ring values and the label.
+    """
+    parsed = tf.io.parse_single_example(serialized_example, RINGS_SCHEMA)
+    rings_tensor = tf.concat(
+        [parsed[f'ring_{i}'] for i in range(N_RINGS)],
+        axis=0
+    )
+    return (rings_tensor, parsed['label'])

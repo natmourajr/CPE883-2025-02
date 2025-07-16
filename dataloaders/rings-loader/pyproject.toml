@@ -1,7 +1,7 @@
 [project]
-name = "tfrecord-loader"
+name = "rings-loader"
 version = "0.1.0"
-description = "Template for loading tfrecord files in a machine learning project."
+description = "Template for loading tfrecord rings files in a machine learning project."
 readme = "README.md"
 requires-python = ">=3.11.13"
 dependencies = [

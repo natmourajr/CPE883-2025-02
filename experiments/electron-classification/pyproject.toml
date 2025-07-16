@@ -7,10 +7,12 @@ requires-python = "==3.11.13"
 dependencies = [
     "jupyterlab>=4.4.4",
     "pandas>=2.3.1",
-    "tfrecord-loader",
+    "rings-loader",
     "torch==2.7.1",
     "typer>=0.16.0",
-    "classification-kan"
+    "classification-kan",
+    "mlflow>=3.1.1",
+    "lightning>=2.5.2",
 ]
 
 [project.scripts]
@@ -21,5 +23,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-tfrecord-loader = { path = "../../dataloaders/tfrecord-loader", editable = true }
+rings-loader = { path = "../../dataloaders/rings-loader", editable = true }
 classification-kan = { path = "../../models/classification-kan", editable = true }
