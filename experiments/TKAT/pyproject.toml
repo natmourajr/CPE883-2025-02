@@ -1,0 +1,30 @@
+[project]
+name = "TKAN"
+version = "0.1.0"
+description = "Time Series KAN Transformer Algorithm"
+readme = "README.md"
+requires-python = ">=3.9.*"
+dependencies = [
+    "numpy==1.26.4",
+    "timm==1.0.3",
+    "torch==2.0.1",
+    "matplotlib==3.10.3"
+]
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "pytest",
+    "black",
+    "mypy"
+]
+
+[project.scripts]
+template-experiment = "template_experiment.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+template-loader = { path = "../../dataloaders/TemplateLoader", editable = true }

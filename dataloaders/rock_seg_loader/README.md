@@ -21,7 +21,9 @@ O diretório contendo os dados deve seguir a seguinte organização:
 ├── DatasetB/
 │ ├── inputs/
 │ └── masks/
-...```
+...
+```
+
 
 
 Cada pasta representa uma amostra diferente (ex: `DatasetA`, `DatasetB`, ...), com subpastas `inputs/` (imagens) e `masks/` (máscaras multiclasse).
@@ -61,6 +63,8 @@ dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
 for images, masks, amostras in dataloader:
     print(images.shape, masks.shape, amostras)
     break
+```
 
-##✍️ Autoria
+## ✍️ Autoria
+
 Desenvolvido por Vivian de Carvalho Rodrigues como parte da disciplina CPE883 (UFOP) – Prof. Natanael Moraes Júnior.
