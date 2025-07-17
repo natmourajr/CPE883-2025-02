@@ -19,6 +19,8 @@ import os
 import sys
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
+from datetime import datetime
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,6 +37,8 @@ from dataloaders.benchmark.collector import Collector3W
 # Ajuste o caminho para a pasta 'kat' (onde está o katransformer.py)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'kat/')))
 from katransformer import KATVisionTransformer
+
+base_folder = os.getenv("BASE_FOLDER")
 
 # PatchEmbed1D para série temporal
 class PatchEmbed1D(nn.Module):
@@ -98,14 +102,50 @@ def prepare_data(batch_size, seq_len, forecast_len):
 
     return x, y
 
-def get_3w_data():
+def get_3w_data(batch_size, seq_len, forecast_len, start_idx=0, step=1, train=True, plot=True):
 
-    dataset = Collector3W(data_path='3w_dataset/data', undesirable_event_code=1, train=True)
+    dataset = Collector3W(data_path=os.path.join(base_folder, 'dataloaders/benchmark/_3w_dataset/data'), undesirable_event_code=1, train=train)
 
-    loader = DataLoader(dataset, batch_size=16, shuffle=True)
+    sensor = 'P-MON-CKP'
+    
+    if plot:
+        # Plot the sensor time series
+        plt.rcParams['font.size'] = 14    
+        fig, axs = plt.subplots(figsize=(12, 7), constrained_layout=True)
+        fig.patch.set_facecolor('white')
+        plt.plot(dataset.df_samples[sensor].values, linewidth=2)
+        plt.title('Série Temporal do sensor {}'.format(sensor))
+        plt.xlabel('samples')
+        plt.ylabel(sensor)
+        plt.grid()
+        plt.show()
 
-    import ipdb
-    ipdb.set_trace()
+    full_series = dataset.df_samples[sensor].values
+    full_timestamps = dataset.df_samples['timestamp'].values
+    total_len = seq_len + forecast_len
+
+    max_possible = (len(full_series) - total_len + 1 - start_idx) // step
+    if batch_size > max_possible:
+        raise ValueError(f"batch_size {batch_size} é maior do que o número possível de janelas {max_possible}.")
+
+    x_list, y_list = [], []
+    x_dates, y_dates = [], []
+
+    for i in range(batch_size):
+        idx = start_idx + i * step
+        window_vals = full_series[idx : idx + total_len]
+        window_dates = full_timestamps[idx : idx + total_len]
+
+        x_list.append(window_vals[:seq_len])
+        y_list.append(window_vals[seq_len:])
+
+        x_dates.append(window_dates[:seq_len])
+        y_dates.append(window_dates[seq_len:])
+
+    x = torch.tensor(x_list, dtype=torch.float32).unsqueeze(-1)  # (batch_size, seq_len, 1)
+    y = torch.tensor(y_list, dtype=torch.float32).unsqueeze(-1)  # (batch_size, forecast_len, 1)
+
+    return x, y
 
 def compute_mse_torch(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
     """
@@ -122,10 +162,10 @@ def compute_mse_torch(y_true: torch.Tensor, y_pred: torch.Tensor) -> float:
 
 # --- Treinamento simples ---
 
-seq_len = 128
+seq_len = 288
 patch_size = 16
-forecast_len = 64
-batch_size = 16
+forecast_len = 32
+batch_size = 256
 model = KATTimeSeriesTransformer(seq_len=seq_len, patch_size=patch_size, num_classes=forecast_len)
 model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -133,14 +173,16 @@ criterion = nn.MSELoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 # Using a sine series
-x_train, y_train = create_sin_data(256, seq_len, forecast_len)
+# x_train, y_train = create_sin_data(256, seq_len, forecast_len)
 # Using a mock series with data/values
 # x_train, y_train = prepare_data(256, seq_len, forecast_len)
+# Using 3w
+x_train, y_train = get_3w_data(batch_size, seq_len, forecast_len)
+
 
 # Standardize the data
 mean = x_train.mean()
 std = x_train.std()
-
 x_train = (x_train - mean) / std
 y_train = (y_train - mean) / std
 
@@ -170,7 +212,7 @@ for epoch in range(10):
 # --- Avaliação e previsão direta de sequência ---
 model.eval()
 with torch.no_grad():
-    t, y_test = create_sin_data(1, seq_len, forecast_len)
+    t, y_test = get_3w_data(1, seq_len, forecast_len, start_idx=1000, train=True, plot=False)
     
     # Standardize the data
     t = (t - mean) / std
