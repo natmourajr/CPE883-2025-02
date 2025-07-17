@@ -1,0 +1,13 @@
+[project]
+name = "nano_bert"
+version = "0.1.0"
+description = "Code for a KAN-based classification neural network."
+readme = "README.md"
+dependencies = [
+
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+]

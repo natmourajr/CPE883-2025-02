@@ -1,0 +1,14 @@
+datasets
+matplotlib
+numpy
+Requests
+scipy
+setuptools
+tiktoken
+timm==1.0.3
+torch
+torchvision
+tqdm
+transformers
+#triton
+wandb
