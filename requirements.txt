@@ -1,0 +1,24 @@
+# requirements.txt
+
+# PyTorch
+torch
+torchvision
+torchaudio
+
+# Manipulação de Dados e EDA
+pandas
+scikit-learn
+numpy
+matplotlib
+seaborn
+
+# Para download do dataset
+kagglehub
+kaggle
+
+# Leitura de diferentes formatos
+pyarrow # para .parquet
+openpyxl # para .xlsx
+
+# Para arquivos de configuração
+pyyaml

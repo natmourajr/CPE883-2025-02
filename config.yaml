@@ -1,0 +1,20 @@
+# config.yaml
+
+dataset:
+  path: "data/images"
+  # Proporções para divisão em [treino, validação, teste]
+  split_ratios: [0.7, 0.15, 0.15]
+  # Semente aleatória para garantir que a divisão seja sempre a mesma
+  random_seed: 42
+
+# Seção para os parâmetros da validação cruzada
+cross_validation:
+  n_splits: 10 # O 'K' do K-Fold, ou seus "10 sorteios"
+
+training:
+  batch_size: 16
+  num_workers: 2
+  epochs: 5 # Número de épocas para treinar em cada fold
+
+model:
+  image_size: 224

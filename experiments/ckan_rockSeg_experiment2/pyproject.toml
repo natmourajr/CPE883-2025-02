@@ -1,0 +1,27 @@
+
+---
+
+### ✅ `pyproject.toml` (usando formato compatível com `uv`, editable install)
+
+```toml
+[project]
+name = "ckan-rockseg"
+version = "0.1.0"
+description = "Segmentação de imagens de microtomografia com CKAN e camadas KAN"
+authors = [
+  { name="Vivian de Carvalho Rodrigues", email="seuemail@dominio.com" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "typer[all]",
+    "matplotlib",
+    "imageio",
+    "scikit-image",
+    "pykan @  https://pypi.org/project/pykan/"
+]
+
+[project.scripts]
+ckan-seg = "main:app"
+
