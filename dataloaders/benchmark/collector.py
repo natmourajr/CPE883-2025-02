@@ -19,6 +19,7 @@ References:
 
 """
 
+import os
 import pandas as pd
 import numpy as np
 import seaborn as sns
@@ -30,8 +31,9 @@ sys.path.append('stac')
 from matplotlib import pyplot as plt
 from time import time
 from pathlib import Path
+from dotenv import load_dotenv
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from tsfresh.feature_extraction import extract_features
 from tsfresh.utilities.dataframe_functions import impute
 from tsfresh.feature_extraction import MinimalFCParameters
@@ -45,6 +47,13 @@ from statsmodels.stats.multicomp import (pairwise_tukeyhsd, MultiComparison)
 
 logging.getLogger('tsfresh').setLevel(logging.ERROR)
 warnings.simplefilter(action='ignore')
+
+# Carrega o arquivo .env
+load_dotenv()
+
+# Pega a variável
+base_folder = os.getenv("BASE_FOLDER")
+
 
 class Collector3W(Dataset):
     def __init__(self, data_path, undesirable_event_code=1,
@@ -233,8 +242,11 @@ class Collector3W(Dataset):
                 l_idx_c = f_idx_c + self.sample_size_default
                 df_sample = df_vars.iloc[int(f_idx_c):int(l_idx_c), :]
                 df_sample.insert(0, 'id', sample_id)
-                df_samples_test = df_samples_test.append(df_sample)
-                df_y_test = df_y_test.append({'instance': instance, 'y': ols[int(l_idx_c)]}, ignore_index=True)
+                df_samples_test = pd.concat([df_samples_test, df_sample], ignore_index=True)
+                df_y_test = pd.concat([
+                    df_y_test,
+                    pd.DataFrame([{'instance': instance, 'y': ols[int(l_idx_c)]}])
+                ], ignore_index=True)
                 sample_id += 1
 
         return df_samples_test, df_y_test, sample_id
@@ -242,13 +254,6 @@ class Collector3W(Dataset):
 
 # Exemplo de uso
 
-from torch.utils.data import DataLoader
-
-dataset = Collector3W(data_path='3w_dataset/data', undesirable_event_code=1, train=True)
+dataset = Collector3W(data_path=os.path.join(base_folder, 'dataloaders/benchmark/_3w_dataset/data'), undesirable_event_code=1, train=True)
 
 loader = DataLoader(dataset, batch_size=16, shuffle=True)
-
-for X, y in loader:
-    print(X.shape)  # (batch_size, time_steps, features)
-    print(y)
-    break
