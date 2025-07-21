@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-from modules.models.ResNet.resnetbaseline import ResNetBaseline
+from modules.models.ResNet_Baseline.resnetbaseline import ResNetBaseline
 
 def load_config():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
