@@ -35,5 +35,7 @@ COPY dataloaders/ /app/
 RUN uv pip install -r /app/requirements.txt
 RUN uv pip install --no-build-isolation -e /app/rational_kat_cu/
 RUN uv pip install -e /app/NLPLoader/
+RUN uv pip install -e /app/nanos/
+RUN uv pip install -e /app/efficient-kan/
 
 # RUN if [ -f uv.lock ]; then uv sync --locked; else uv pip install -r requirements.txt; fi
