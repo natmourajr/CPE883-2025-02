@@ -15,7 +15,7 @@ training:
   batch_size: 16
   num_workers: 2
   epochs: 5 # Número de épocas para treinar em cada fold
-  early_stopping_patience: 7
+  early_stopping_patience: 25
   
 model:
   image_size: 224

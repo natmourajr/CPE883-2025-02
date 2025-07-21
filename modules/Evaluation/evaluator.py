@@ -180,7 +180,7 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir):
     mean_auc = np.mean(val_aucs)
     std_auc = np.std(val_aucs)
     
-   2 print("\n" + "-"*50)
+    print("\n" + "-"*50)
     print(f"RESULTADO FINAL PARA O MODELO: {model_name}")
     print(f"AUC Médio (Validação): {mean_auc:.4f} (+/- {std_auc:.4f})")
     print("-" * 50)
