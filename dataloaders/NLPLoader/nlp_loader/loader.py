@@ -7,9 +7,9 @@ import torch
 import requests
 
 class NLPDataLoader:
-    def __init__(self, tokenizer, block_size, model = "gpt", dataset_name='shakespeare', split_ratio={"train":0.9,"val":0.1,"test":0.0}, retokenize=True):
+    def __init__(self, tokenizer, block_size, out_dir, model = "gpt", dataset_name='shakespeare', split_ratio={"train":0.9,"val":0.1,"test":0.0}, retokenize=True):
         # TODO maybe I should allow the user to specify the data_dir
-        self.data_dir = self.get_data_dir()
+        self.data_dir = out_dir
         self.dataset = {}
         
         self.download_dataset(dataset_name)
@@ -122,7 +122,6 @@ class NLPDataLoader:
 
     # Create data files from tokenized data and save as bins
     def create_data_files(self, tokenized_data, data_dir, split_ratio, meta):
-        data_dir = self.get_data_dir()
 
         data_length = len(tokenized_data)
 
@@ -141,19 +140,8 @@ class NLPDataLoader:
             np.array(test_split, dtype=np.uint16).tofile(os.path.join(self.data_dir, 'test.bin'))
             
         # Save tokenizer metadata
-        with open(os.path.join(data_dir, 'meta.pkl'), 'wb') as f:
+        with open(os.path.join(self.data_dir, 'meta.pkl'), 'wb') as f:
             pickle.dump(meta, f)
-
-    def get_data_dir(self):
-        # For notebooks: __file__ is not defined, so use current directory
-        try:
-            out_dir = os.path.dirname(__file__)
-        except NameError:
-            out_dir = os.getcwd()
-        out_dir = f"{out_dir}/nlp"
-        os.makedirs(f'{out_dir}', exist_ok=True)
-
-        return out_dir
 
 
 class GPTDataset(Dataset):
@@ -197,6 +185,10 @@ class BERTDataset(Dataset):
         chunk = self.data[idx : idx + self.block_size]
         x = torch.from_numpy(chunk.astype(np.int64))
         y = x.clone()
+
+        mask = torch.rand(x.shape) < 0.15
+        y[~mask] = -100         # only calculate loss on masked tokens
+        x[mask] = 65 # TODO maybe import the tokenizers to set as a variable
         #y = torch.from_numpy(chunk[1:].astype(np.int64))
 
         return x, y
