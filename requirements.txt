@@ -11,6 +11,7 @@ scikit-learn
 numpy
 matplotlib
 seaborn
+sklearn
 
 # Para download do dataset
 kagglehub

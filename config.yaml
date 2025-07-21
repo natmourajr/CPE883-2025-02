@@ -15,6 +15,17 @@ training:
   batch_size: 16
   num_workers: 2
   epochs: 5 # Número de épocas para treinar em cada fold
-
+  early_stopping_patience: 7
+  
 model:
   image_size: 224
+
+  architecture:
+    # Lista de canais: [entrada, bloco_1_saida, bloco_2_saida, ...]
+    channels: [3, 16, 32]
+    kernel_size: [3, 3]
+    padding: [1, 1]
+    
+    # Parâmetros específicos do KAN
+    grid_size: 5
+    spline_order: 3 

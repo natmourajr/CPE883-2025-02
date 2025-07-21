@@ -9,34 +9,38 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-# ============================================================
-# Adicionar a este código o módulo com a arquitetura CapsNet real
-# ============================================================
-# Por enquanto, um esqueleto simples para teste.
-# ============================================================
-
+#from modules.models.CKAN.CapsNet import CapsNet
 
 def load_config():
-    """Carrega o arquivo de configuração da raiz do projeto."""
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     config_path = os.path.join(project_root, 'config.yaml')
     with open(config_path, 'r') as file:
         return yaml.safe_load(file)
-
+        
 def main():
-    """
-    Ponto de entrada para executar a avaliação K-Fold para a CapsNet.
-    """
-    # Carrega a configuração geral do projeto
     config = load_config()
+
+    # Cria uma pasta única para este experimento com base no tempo
+    model_name = "CapsNet" 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_dir = f"results/{model_name}/{timestamp}"
+    os.makedirs(experiment_dir, exist_ok=True)
+    print(f"Artefatos deste experimento serão salvos em: {experiment_dir}")
+
+    # Salva uma cópia da configuração usada para reprodutibilidade
+    shutil.copy('config.yaml', os.path.join(experiment_dir, 'config.yaml'))
     
-    # Chama a função de avaliação, passando a CLASSE do modelo
-    run_kfold_evaluation(
+    results = run_kfold_evaluation(
         model_class=CapsNet, 
-        model_name="CapsNet", 
+        model_name=model_name, 
         config=config,
-        device="cuda"
+        experiment_dir=experiment_dir 
     )
+
+    results_path = os.path.join(experiment_dir, 'summary_results.json')
+    with open(results_path, 'w') as f:
+        yaml.dump(results, f)
+    print(f"\nResultados de sumarização salvos em: {results_path}")
 
 if __name__ == '__main__':
     main()
