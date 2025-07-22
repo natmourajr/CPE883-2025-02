@@ -113,7 +113,8 @@ class TransformerModule(nn.Module):
                  num_heads: int = 8,
                  ffn_dim: int = 2048,
                  dropout: float = 0.1,
-                 activation: str = "relu"):
+                 activation: str = "relu",
+                 kdim: int = None):
         super().__init__()
         if input_dim % num_heads != 0:
             raise ValueError("input_dim must be divisible by num_heads")
@@ -121,7 +122,7 @@ class TransformerModule(nn.Module):
         act_fn = nn.ReLU() if activation == "relu" else nn.GELU()
         self.layers = nn.ModuleList([
             nn.ModuleDict({
-                "attn": nn.MultiheadAttention(input_dim, num_heads,
+                "attn": nn.MultiheadAttention(input_dim, num_heads, kdim=kdim,
                                                dropout=dropout, batch_first=True),
                 "norm1": nn.LayerNorm(input_dim),
                 "ffn": nn.Sequential(
