@@ -1,18 +1,35 @@
+# transformer_lm.py – versão aprimorada 
+# =============================================================
+# Pequeno Language Model autoregressivo baseado em Transformer
+# =============================================================
+# Melhorias em relação à versão anterior:
+# • Treinamento "teacher‑forcing" em TODOS os passos (perda token‑a‑token).
+# • Dataset alternativo para retorno "inputs, targets_shifted".
+# • Método generate() para geração autoregressiva.
+# • Exemplo de uso com ambos os regimes de treino.
+# • Fórmula sinusoidal identicamente à Eq. (3) do paper
+#   "Attention Is All You Need" (Vaswani et al., 2017).
+# =============================================================
+
 import math
+from typing import Optional, List
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-from typing import Optional
 
-# =============================================================
-# Embeddings + Unembeddings
-# =============================================================
+# -------------------------------------------------------------
+# 1. Embeddings ↔ Unembeddings
+# -------------------------------------------------------------
 class EmbeddingsAndUnembeddings(nn.Module):
-    """Token ↔️ hidden space converter with positional encodings.
+    """Token ⇄ hidden‑space converter com codificação posicional.
 
-    * Scales token embeddings by ``sqrt(embed_dim)``   (Vaswani et al., 2017).
-    * Can **tie weights** between embedding ↔ unembedding (default ‑ on).
-    * Supports fixed sinusoidal or learnable positional embeddings.
+    - Escala embeddings por ``sqrt(embed_dim)`` (paper original).
+    - Interface idêntica ao Vaswani et al. (sin/cos alternados):
+        * ``PE(pos, 2k)   =  sin(pos / 10000^{2k/d})``
+        * ``PE(pos, 2k+1) =  cos(pos / 10000^{2k/d})``
+    - Suporte a embeddings posicionais aprendíveis.
+    - Weight‑tying opcional entre embedding e projeção final.
     """
 
     def __init__(self,
@@ -41,41 +58,37 @@ class EmbeddingsAndUnembeddings(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(dropout)
 
-        # Projection back to logits
+        # Projeção de volta para logits
         self.unembed = nn.Linear(embed_dim, vocab_size, bias=False)
         if tie_weights:
-            # Weight tying (pressupposes same shapes)
-            self.unembed.weight = self.token_embedding.weight  # share params
+            self.unembed.weight = self.token_embedding.weight  # compartilhamento
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
     @staticmethod
     def _generate_sinusoidal_encoding(max_seq_len: int, embed_dim: int) -> torch.Tensor:
-        """Return (1, max_seq_len, embed_dim) sinusoidal table."""
+        """Tabela sin‑cos (1, max_seq_len, embed_dim) conforme Vaswani.•Eq (3)."""
         pe = torch.zeros(max_seq_len, embed_dim)
         position = torch.arange(max_seq_len, dtype=torch.float32).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, embed_dim, 2).float() *
-                             (-math.log(10000.0) / embed_dim))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        return pe.unsqueeze(0)  # (1, L, D)
+        div_term = torch.exp(
+            torch.arange(0, embed_dim, 2).float() * (-math.log(10000.0) / embed_dim)
+        )
+        pe[:, 0::2] = torch.sin(position / div_term)  # dim 2k
+        pe[:, 1::2] = torch.cos(position / div_term)  # dim 2k+1
+        return pe.unsqueeze(0)  # shape (1, L, D)
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
     def forward(self, input_ids: torch.LongTensor) -> torch.Tensor:
-        """Return hidden states (batch, seq, embed_dim)."""
+        """Retorna hidden states (batch, seq, embed_dim)."""
         batch, seq_len = input_ids.shape
 
-        # Positional sanity‑check
-        if self.pos_embedding is None:  # fixed case
+        if self.pos_embedding is None:
             if seq_len > self.positional_encoding.size(1):
-                raise ValueError(
-                    f"Sequence length {seq_len} > max_seq_len="
-                    f"{self.positional_encoding.size(1)} – either increase "
-                    "max_seq_len or use learned_pos=True")
+                raise ValueError("Sequence length exceeds max_seq_len of fixed table")
         else:
             if seq_len > self.pos_embedding.num_embeddings:
                 raise ValueError("Sequence length exceeds learned positional table")
 
-        tok = self.token_embedding(input_ids) * self.scale  # scaling ✅
+        tok = self.token_embedding(input_ids) * self.scale
 
         if self.pos_embedding is not None:
             pos_idx = torch.arange(seq_len, device=input_ids.device)
@@ -85,22 +98,15 @@ class EmbeddingsAndUnembeddings(nn.Module):
 
         return self.dropout(tok + pos)
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
     def decode(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        """Project (batch, seq, embed_dim) → (batch, seq, vocab_size)."""
         return self.unembed(hidden_states)
 
 
-# =============================================================
-# Generic Transformer stack
-# =============================================================
+# -------------------------------------------------------------
+# 2. Transformer Encoder‑style
+# -------------------------------------------------------------
 class TransformerModule(nn.Module):
-    """Encoder‑style stack **usable on any sequence of vectors**.
-
-    Implements: (SA → Add&Norm → FFN → Add&Norm)×N.
-    Support for causal mask generation (autoregressive tasks).
-    """
-
     def __init__(self,
                  input_dim: int,
                  num_layers: int = 6,
@@ -113,20 +119,21 @@ class TransformerModule(nn.Module):
             raise ValueError("input_dim must be divisible by num_heads")
 
         act_fn = nn.ReLU() if activation == "relu" else nn.GELU()
-        self.layers = nn.ModuleList()
-        for _ in range(num_layers):
-            self.layers.append(nn.ModuleDict({
+        self.layers = nn.ModuleList([
+            nn.ModuleDict({
                 "attn": nn.MultiheadAttention(input_dim, num_heads,
                                                dropout=dropout, batch_first=True),
                 "norm1": nn.LayerNorm(input_dim),
                 "ffn": nn.Sequential(
                     nn.Linear(input_dim, ffn_dim), act_fn, nn.Dropout(dropout),
-                    nn.Linear(ffn_dim, input_dim)),
+                    nn.Linear(ffn_dim, input_dim)
+                ),
                 "norm2": nn.LayerNorm(input_dim),
                 "drop": nn.Dropout(dropout)
-            }))
+            }) for _ in range(num_layers)
+        ])
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
     def forward(self,
                 x: torch.Tensor,
                 attn_mask: Optional[torch.Tensor] = None,
@@ -140,46 +147,38 @@ class TransformerModule(nn.Module):
             x = layer["norm2"](x + layer["drop"](ffn_out))
         return x
 
-    # =========================================================
-    # Training helpers for autoregressive LM (1‑step ahead)
-    # =========================================================
+    # ---------------------------------------------------------
     @staticmethod
     def _causal_mask(seq_len: int, device: torch.device) -> torch.Tensor:
-        """Return (seq_len, seq_len) upper‑triangular mask with -inf above diag."""
-        mask = torch.full((seq_len, seq_len), float('-inf'), device=device)
-        mask = torch.triu(mask, diagonal=1)
+        mask = torch.triu(torch.full((seq_len, seq_len), float('-inf'), device=device), diagonal=1)
         return mask
 
     # ---------------------------------------------------------
-    def train_nlp(self,
-                  emb: EmbeddingsAndUnembeddings,
-                  loader: DataLoader,
-                  optimizer: torch.optim.Optimizer,
-                  criterion: nn.Module,
-                  device: torch.device,
-                  epochs: int = 1,
-                  grad_clip: Optional[float] = 1.0):
-        """One‑step next‑token training with **causal mask**."""
+    def train_lm(self,
+                 emb: EmbeddingsAndUnembeddings,
+                 loader: DataLoader,
+                 optimizer: torch.optim.Optimizer,
+                 criterion: nn.Module,
+                 device: torch.device,
+                 epochs: int = 1,
+                 grad_clip: Optional[float] = 1.0):
+        """Treino token‑a‑token (teacher‑forcing)."""
         emb.to(device); self.to(device)
-        for ep in range(1, epochs+1):
-            self.train(); emb.train()
-            total = 0.0
-            for inp, target in loader:
+        for ep in range(1, epochs + 1):
+            self.train(); emb.train(); total = 0.0
+            for inp, target in loader:  # target possui mesmo shape de inp
                 inp, target = inp.to(device), target.to(device)
                 seq_len = inp.size(1)
                 mask = self._causal_mask(seq_len, device)
                 hidden = emb(inp)
                 encoded = self(hidden, attn_mask=mask)
-                logits = emb.decode(encoded)[:, -1, :]  # last step only
-                loss = criterion(logits, target)
+                logits = emb.decode(encoded)
+                loss = criterion(logits.view(-1, logits.size(-1)), target.view(-1))
 
-                optimizer.zero_grad()
-                loss.backward()
+                optimizer.zero_grad(); loss.backward()
                 if grad_clip is not None:
-                    torch.nn.utils.clip_grad_norm_(
-                        list(self.parameters()) + list(emb.parameters()), grad_clip)
-                optimizer.step()
-                total += loss.item()
+                    torch.nn.utils.clip_grad_norm_(list(self.parameters()) + list(emb.parameters()), grad_clip)
+                optimizer.step(); total += loss.item()
             print(f"Epoch {ep}/{epochs} – loss: {total/len(loader):.4f}")
 
     # ---------------------------------------------------------
@@ -188,7 +187,6 @@ class TransformerModule(nn.Module):
                            emb: EmbeddingsAndUnembeddings,
                            input_ids: torch.LongTensor,
                            device: torch.device) -> torch.Tensor:
-        """Return logits (vocab,) for the token immediately after *input_ids*."""
         self.eval(); emb.eval()
         input_ids = input_ids.to(device)
         seq_len = input_ids.size(1)
@@ -198,52 +196,83 @@ class TransformerModule(nn.Module):
         logits = emb.decode(encoded)
         return logits[0, -1, :]
 
+    # ---------------------------------------------------------
+    @torch.no_grad()
+    def generate(self,
+                 emb: EmbeddingsAndUnembeddings,
+                 start_tokens: torch.LongTensor,
+                 max_new_tokens: int,
+                 temperature: float = 1.0,
+                 top_k: Optional[int] = None,
+                 eos_token: Optional[int] = None,
+                 device: Optional[torch.device] = None) -> torch.LongTensor:
+        """Gera sequência autoregressivamente."""
+        if device is None:
+            device = next(self.parameters()).device
+        self.eval(); emb.eval()
+        seq = start_tokens.to(device)
+        for _ in range(max_new_tokens):
+            logits = self.predict_next_token(emb, seq, device) / temperature
+            if top_k is not None:
+                vals, idx = torch.topk(logits, top_k)
+                probs = torch.full_like(logits, 0.0)
+                probs[idx] = torch.softmax(vals, -1)
+            else:
+                probs = torch.softmax(logits, -1)
+            next_token = torch.multinomial(probs, 1)
+            seq = torch.cat([seq, next_token.unsqueeze(0)], dim=1)
+            if eos_token is not None and next_token.item() == eos_token:
+                break
+        return seq
 
-# =============================================================
-# Simple Dataset producing (window[:-1], next_token)
-# =============================================================
-class NextTokenDataset(Dataset):
+
+# -------------------------------------------------------------
+# 3. Datasets
+# -------------------------------------------------------------
+class LanguageModelingDataset(Dataset):
+    """Retorna (seq[:-1], seq[1:]) para teacher‑forcing."""
     def __init__(self, tokens: torch.Tensor, window: int):
-        self.inputs = []
-        self.targets = []
-        for i in range(len(tokens) - window):
-            self.inputs.append(tokens[i:i+window])
-            self.targets.append(tokens[i+window])
+        self.inputs: List[torch.Tensor] = []
+        self.targets: List[torch.Tensor] = []
+        for i in range(len(tokens) - window - 1):
+            segment = tokens[i : i + window + 1]
+            self.inputs.append(segment[:-1])
+            self.targets.append(segment[1:])
         self.inputs = torch.stack(self.inputs)
-        self.targets = torch.tensor(self.targets, dtype=torch.long)
+        self.targets = torch.stack(self.targets)
+
     def __len__(self):
         return len(self.targets)
+
     def __getitem__(self, idx):
         return self.inputs[idx], self.targets[idx]
 
 
-# =============================================================
-# Demo / quick‑test – one‑step prediction
-# =============================================================
+# -------------------------------------------------------------
+# 4. Demo – treino completo + geração
+# -------------------------------------------------------------
 if __name__ == "__main__":
     torch.manual_seed(0)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Synthetic token stream
-    vocab, embed_dim, seq_len = 500, 32, 12
-    tokens_stream = torch.randint(0, vocab, (2000,))
+    # Dados sintéticos
+    vocab, embed_dim, window = 500, 32, 16  # janela = 16 ⇒ modelo vê 15 e prevê 15
+    tokens_stream = torch.randint(0, vocab, (3000,))
 
-    # Data
-    dataset = NextTokenDataset(tokens_stream, seq_len)
+    dataset = LanguageModelingDataset(tokens_stream, window)
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-    # Modules
-    emb = EmbeddingsAndUnembeddings(vocab, embed_dim, max_seq_len=seq_len)
-    model = TransformerModule(embed_dim, num_layers=2, num_heads=4, ffn_dim=128)
+    emb = EmbeddingsAndUnembeddings(vocab, embed_dim, max_seq_len=window)
+    model = TransformerModule(embed_dim, num_layers=3, num_heads=4, ffn_dim=128)
 
-    opt = torch.optim.Adam(list(emb.parameters()) + list(model.parameters()), lr=1e-3)
+    opt = torch.optim.AdamW(list(emb.parameters()) + list(model.parameters()), lr=3e-4)
     crit = nn.CrossEntropyLoss()
 
-    print("Training...")
-    model.train_nlp(emb, loader, opt, crit, device, epochs=3)
+    print("Training…")
+    model.train_lm(emb, loader, opt, crit, device, epochs=4)
 
-    # Predict 1‑step
-    context = tokens_stream[:seq_len].unsqueeze(0)  # (1, seq_len)
-    logits = model.predict_next_token(emb, context, device)
-    print("Next‑token probs (top‑5):",
-          torch.softmax(logits, -1).topk(5).indices.tolist())
+    # Geração de exemplo
+    context = tokens_stream[:5].unsqueeze(0)  # prompt inicial (1,5)
+    generated = model.generate(emb, context, max_new_tokens=10, top_k=20)
+    print("Prompt:", context.tolist()[0])
+    print("Generated:", generated.tolist()[0])
