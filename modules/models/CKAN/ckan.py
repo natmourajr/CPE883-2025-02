@@ -6,7 +6,7 @@ import torch.nn as nn
 from .kan_lib.KANConv import KAN_Convolutional_Layer
 
 class CKAN(nn.Module):
-    def __init__(self, num_classes=2, device="cpu"): 
+    def __init__(self, model_config, num_classes=2, device="cpu"): 
         super(CKAN, self).__init__()
         print(f"Inicializando modelo CKAN")
         # Extrai os parâmetros do dicionário de configuração

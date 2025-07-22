@@ -203,3 +203,4 @@ cython_debug/
 .vscode/
 data/
 cpe883_latest.sif
+results/

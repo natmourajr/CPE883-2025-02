@@ -6,6 +6,8 @@ import torch.nn as nn
 from torchvision import models
 import sys
 import os
+from datetime import datetime
+import shutil
 
 # Adiciona o diretório raiz do projeto ao path do Python
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))

@@ -12,7 +12,7 @@ cross_validation:
   n_splits: 10 # O 'K' do K-Fold, ou seus "10 sorteios"
 
 training:
-  batch_size: 16
+  batch_size: 4
   num_workers: 2
   epochs: 5 # Número de épocas para treinar em cada fold
   early_stopping_patience: 25

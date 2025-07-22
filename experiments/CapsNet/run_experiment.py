@@ -4,12 +4,15 @@ import yaml
 import torch
 import sys
 import os
+from datetime import datetime
+import shutil
+
 
 # Adiciona o diretório raiz do projeto ao path do Python para encontrar os módulos
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-#from modules.models.CKAN.CapsNet import CapsNet
+#from modules.models.CapsNet.capsnet import CapsNet
 
 def load_config():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
