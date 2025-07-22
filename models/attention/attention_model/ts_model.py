@@ -370,7 +370,7 @@ if __name__ == "__main__":
         seq_len=3600,
         local_len=60,
         pred_len=120,
-        d_model=2048,
+        d_model=64,
         n_heads=2,
         n_global_layers=2,
         n_local_layers=2,
