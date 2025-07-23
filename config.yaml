@@ -14,18 +14,18 @@ cross_validation:
 training:
   batch_size: 4
   num_workers: 2
-  epochs: 5 # Número de épocas para treinar em cada fold
+  epochs: 5000 # Número de épocas para treinar em cada fold
   early_stopping_patience: 25
   
 model:
-  image_size: 224
+  image_size: 128
 
   architecture:
     # Lista de canais: [entrada, bloco_1_saida, bloco_2_saida, ...]
-    channels: [3, 16, 32]
+    channels: [3, 8, 16]
     kernel_size: [3, 3]
     padding: [1, 1]
     
     # Parâmetros específicos do KAN
-    grid_size: 5
+    grid_size: 4 
     spline_order: 3 

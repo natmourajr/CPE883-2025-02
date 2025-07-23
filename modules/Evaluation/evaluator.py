@@ -5,6 +5,7 @@ import numpy as np
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import KFold
+from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import roc_curve, roc_auc_score
 import matplotlib.pyplot as plt
 import os
@@ -36,7 +37,7 @@ def plot_roc_curve(y_true, y_probs, fold, set_name, save_dir):
 def run_kfold_evaluation_dry_run(model_class, model_name, config):
     """
     VERSÃO DE TESTE RÁPIDO ("DRY RUN")
-    Verifica se a estrutura K-Fold e os DataLoaders estão funcionando,
+    Verifica se a estrutura Stratified-K-Fold e os DataLoaders estão funcionando,
     sem executar o treinamento completo.
     """
     print(f"\n===== MODO DE TESTE RÁPIDO PARA O MODELO: {model_name} =====")
@@ -44,10 +45,11 @@ def run_kfold_evaluation_dry_run(model_class, model_name, config):
     full_dataset = TuberculosisDataset(data_dir=config['dataset']['path'])
     
     k_folds = config['cross_validation']['n_splits']
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=config['dataset']['random_seed'])
+    kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=config['dataset']['random_seed'])
     
+    y_labels = full_dataset.metadata['label'].values
     # Loop principal da validação cruzada
-    for fold, (train_indices, val_indices) in enumerate(kf.split(full_dataset)):
+    for fold, (train_indices, val_indices) in enumerate(kf.split(full_dataset.metadata, y_labels)):
         print("-" * 50)
         print(f"Verificando Fold {fold + 1}/{k_folds}")
         
@@ -86,17 +88,17 @@ def run_kfold_evaluation_dry_run(model_class, model_name, config):
     # device define o dispositivo de hardware (CPU, cuda, se configurado)
 
 def run_kfold_evaluation(model_class, model_name, config, experiment_dir):
-    print(f"\n===== INICIANDO AVALIAÇÃO K-FOLD PARA O MODELO: {model_name} =====")
+    print(f"\n===== INICIANDO AVALIAÇÃO STRATIFIED-K-FOLD PARA O MODELO: {model_name} =====")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Dispositivo de treinamento: {device}")
 
     full_dataset = TuberculosisDataset(data_dir=config['dataset']['path'])
     k_folds = config['cross_validation']['n_splits']
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=config['dataset']['random_seed'])
+    kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=config['dataset']['random_seed'])
     
     fold_results = []
-
-    for fold, (train_indices, val_indices) in enumerate(kf.split(full_dataset)):
+    y_labels = full_dataset.metadata['label'].values
+    for fold, (train_indices, val_indices) in enumerate(kf.split(full_dataset.metadata, y_labels)):
         fold_num = fold + 1
         print(f"\n--- Fold {fold_num}/{k_folds} ---")
 
