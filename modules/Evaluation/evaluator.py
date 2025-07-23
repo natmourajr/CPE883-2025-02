@@ -177,8 +177,8 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir):
 
     val_aucs = [result['auc_validação'] for result in fold_results]
     
-    mean_auc = np.mean(val_aucs)
-    std_auc = np.std(val_aucs)
+    mean_auc = float(np.mean(val_aucs))
+    std_auc = float(np.std(val_aucs))
     
     print("\n" + "-"*50)
     print(f"RESULTADO FINAL PARA O MODELO: {model_name}")
