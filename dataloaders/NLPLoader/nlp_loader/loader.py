@@ -7,10 +7,11 @@ import torch
 import requests
 
 class NLPDataLoader:
-    def __init__(self, tokenizer, block_size, out_dir, model = "gpt", dataset_name='shakespeare', split_ratio={"train":0.9,"val":0.1,"test":0.0}, retokenize=True):
+    def __init__(self, tokenizer, block_size, out_dir, dataloader = "gpt", dataset_name='shakespeare', split_ratio={"train":0.9,"val":0.1,"test":0.0}, retokenize=True):
         # TODO maybe I should allow the user to specify the data_dir
         self.data_dir = out_dir
         self.dataset = {}
+        self.mask = 65 # TODO get this dynamically
         
         self.download_dataset(dataset_name)
 
@@ -22,18 +23,28 @@ class NLPDataLoader:
 
         for split in split_ratio.keys():
             if split_ratio[split] > 0.0:
-                if model == "gpt":
+                if dataloader == "gpt":
                     self.dataset[split] = GPTDataset(
                         split,
                         block_size,
                         self.data_dir,
                     )
-                elif model == "bert":
+                elif dataloader == "bert":
                     self.dataset[split] = BERTDataset(
                     split,
                     block_size,
                     self.data_dir,
+                    self.mask
                 )
+                elif dataloader == "diffusion":
+                    self.dataset[split] = DiffusionDataset(
+                    split,
+                    block_size,
+                    self.data_dir,
+                    self.mask
+                )
+                else:
+                    assert False, f"Unknown dataloader type: {dataloader}"
 
     def download_dataset(self, dataset_name):
         dataset_path = os.path.join(self.data_dir, f'{dataset_name}.txt')
@@ -112,6 +123,8 @@ class NLPDataLoader:
             meta['vocab_size'] =  vocab_size
             meta['i2t'] = id_to_token
             meta['t2i'] = token_to_id
+
+            self.mask = token_to_id['[MASK]']
             
         # TODO - this is deprecated at the moment, not sure if I need it but if I want to use then I need to add a [MASK] token.
         elif tokenizer == 'gpt2':
@@ -167,8 +180,9 @@ class GPTDataset(Dataset):
         return x, y
 
 class BERTDataset(Dataset):
-    def __init__(self, split, block_size, token_dir):
+    def __init__(self, split, block_size, token_dir, mask):
         self.block_size = block_size
+        self.mask = mask
 
         self.data = np.memmap(
             os.path.join(token_dir, f"{split}.bin"),
@@ -188,11 +202,46 @@ class BERTDataset(Dataset):
 
         mask = torch.rand(x.shape) < 0.15
         y[~mask] = -100         # only calculate loss on masked tokens
-        x[mask] = 65 # TODO maybe import the tokenizers to set as a variable
+        x[mask] = self.mask 
         #y = torch.from_numpy(chunk[1:].astype(np.int64))
 
         return x, y
 
+class DiffusionDataset(Dataset):
+    def __init__(self, split, block_size, token_dir, mask):
+        self.block_size = block_size
+        self.mask = mask
+        self.eps = 1e-3
+
+        self.data = np.memmap(
+            os.path.join(token_dir, f"{split}.bin"),
+            dtype=np.uint16,
+            mode='r'
+        )
+
+        self.length = len(self.data) - block_size
+
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, idx):
+        # Load a chunk of tokens
+        chunk = self.data[idx : idx + self.block_size]
+        x = torch.from_numpy(chunk.astype(np.int64))  # (block_size,)
+
+        # === Diffusion-style stochastic masking ===
+        t = torch.rand(1)  # one value per example
+        p_mask = (1 - self.eps) * t + self.eps  # scalar ∈ [eps, 1]
+        p_mask = p_mask.item()  # convert to Python float
+
+        # Apply the same p_mask across the sequence
+        mask = torch.rand(x.shape) < p_mask
+
+        y = x.clone()
+        y[~mask] = -100 
+        x[mask] = self.mask
+
+        return x, y
 
 
 
