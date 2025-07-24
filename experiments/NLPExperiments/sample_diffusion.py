@@ -89,6 +89,12 @@ else:
     exit()
 
 
+out = model.generate_m(device, steps=128, gen_length=128, block_length=32, temperature=0., cfg_scale=0., remasking='low_confidence')
+
+print(decode(out[0].tolist()))
+
+
+exit()
 val_dataset = nlp_dataloader.dataset['val']
 
 data_loader = DataLoader(

@@ -28,7 +28,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 #from model import GPTConfig, GPT
-from models import GPTConfig, GPT, BERT
+from models import GPTConfig, GPT
 from nlp_loader.loader import NLPDataLoader
 
 
@@ -74,7 +74,7 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 from torch.utils.data import DataLoader
 # DataLoading
-nlp_dataloader = NLPDataLoader(tokenizer, block_size, out_dir, model_name, dataset_name, split_ratio, retokenize)
+nlp_dataloader = NLPDataLoader(tokenizer, block_size, out_dir, dataloader, dataset_name, split_ratio, retokenize)
 train_dataset = nlp_dataloader.dataset['train']
 val_dataset = nlp_dataloader.dataset['val']
 
@@ -149,11 +149,9 @@ if init_from == 'scratch':
         print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     model_args['kan'] = kan
+    model_args['attention'] = attention
     gptconf = GPTConfig(**model_args)
-    if model_name == 'gpt':
-        model = GPT(gptconf)
-    else:
-        model = BERT(gptconf)
+    model = GPT(gptconf)
 elif init_from == 'resume':
     print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint.
