@@ -23,9 +23,9 @@ class Time2Vec(nn.Module):
 
     def forward(self, timestamps: torch.Tensor, device = None) -> torch.Tensor:
         timestamps = timestamps.to(device)
-        pos = (timestamps - timestamps.min(dim=1, keepdim=True)[0]) / (
-            timestamps.max(dim=1, keepdim=True)[0] - timestamps.min(dim=1, keepdim=True)[0] + 1e-8
-        )
+        t0   = timestamps.min(dim=1, keepdim=True)[0]
+        span = timestamps.max(dim=1, keepdim=True)[0] - t0 + 1e-8
+        pos  = (timestamps - t0) / span   
         v0 = self.w0 * pos + self.b0
         vp = torch.sin(pos.unsqueeze(-1) * self.w + self.b)
         if device is not None:
@@ -305,27 +305,7 @@ class TSDiffusion(nn.Module):
         device: torch.device = None
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        def make_dataset(df):
-            if timestamp_col != 'index':
-                df = df.sort_values(timestamp_col).reset_index(drop=True)
-            ts = pd.to_datetime(df[timestamp_col] if timestamp_col != 'index' else df.index).astype('int64') / 1e9
-            data = torch.tensor(df[feature_cols].values, dtype=torch.float32)
-            times = torch.tensor(ts.values, dtype=torch.float32)
-            static = torch.tensor(df[static_features_cols].values, dtype=torch.float32) if static_features_cols else None
-            if window_size is None or window_size >= len(df):
-                seqs = data.unsqueeze(0)
-                ts_seqs = times.unsqueeze(0)
-                stat_seqs = static.unsqueeze(0) if static is not None else None
-            else:
-                n_ws = len(df) - window_size + 1
-                seqs = torch.stack([data[i:i+window_size] for i in range(n_ws)])
-                ts_seqs = torch.stack([times[i:i+window_size] for i in range(n_ws)])
-                stat_seqs = torch.stack([static[i] for i in range(n_ws)])
-            if stat_seqs is None:
-                return TensorDataset(seqs, ts_seqs)
-            return TensorDataset(seqs, ts_seqs, stat_seqs)
-
-        test_ds = make_dataset(df_test)
+        test_ds = self._make_dataset(df_test, timestamp_col, window_size, feature_cols, static_features_cols)
         test_loader = DataLoader(test_ds, batch_size=1)
         self.to(device).eval()
         total_loss = 0.0
@@ -343,6 +323,27 @@ class TSDiffusion(nn.Module):
         avg_loss = total_loss / len(test_ds)
         return avg_loss
     
+    @staticmethod
+    def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols):
+        if timestamp_col != 'index':
+            df = df.sort_values(timestamp_col).reset_index(drop=True)
+        ts = pd.to_datetime(df[timestamp_col] if timestamp_col != 'index' else df.index).astype('int64') / 1e9
+        data = torch.tensor(df[feature_cols].values, dtype=torch.float32)
+        times = torch.tensor(ts.values, dtype=torch.float32)
+        static = torch.tensor(df[static_features_cols].values, dtype=torch.float32) if static_features_cols else None
+        if window_size is None or window_size >= len(df):
+            seqs = data.unsqueeze(0)
+            ts_seqs = times.unsqueeze(0)
+            stat_seqs = static[0].unsqueeze(0) if static is not None else None
+        else:
+            n_ws = len(df) - window_size + 1
+            seqs = torch.stack([data[i:i+window_size] for i in range(n_ws)])
+            ts_seqs = torch.stack([times[i:i+window_size] for i in range(n_ws)])
+            stat_seqs = static[0].unsqueeze(0).repeat(n_ws, 1)  if static is not None else None
+        if stat_seqs is None:
+            return TensorDataset(seqs, ts_seqs)
+        return TensorDataset(seqs, ts_seqs, stat_seqs)
+    
     def train_model(
         self,
         df_train: pd.DataFrame,
@@ -358,28 +359,10 @@ class TSDiffusion(nn.Module):
         verbose: bool = True
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        def make_dataset(df):
-            if timestamp_col != 'index':
-                df = df.sort_values(timestamp_col).reset_index(drop=True)
-            ts = pd.to_datetime(df[timestamp_col] if timestamp_col != 'index' else df.index).astype('int64') / 1e9
-            data = torch.tensor(df[feature_cols].values, dtype=torch.float32)
-            times = torch.tensor(ts.values, dtype=torch.float32)
-            static = torch.tensor(df[static_features_cols].values, dtype=torch.float32) if static_features_cols else None
-            if window_size is None or window_size >= len(df):
-                seqs = data.unsqueeze(0)
-                ts_seqs = times.unsqueeze(0)
-                stat_seqs = static.unsqueeze(0) if static is not None else None
-            else:
-                n_ws = len(df) - window_size + 1
-                seqs = torch.stack([data[i:i+window_size] for i in range(n_ws)])
-                ts_seqs = torch.stack([times[i:i+window_size] for i in range(n_ws)])
-                stat_seqs = torch.stack([static[i] for i in range(n_ws)])
-            if stat_seqs is None:
-                return TensorDataset(seqs, ts_seqs)
-            return TensorDataset(seqs, ts_seqs, stat_seqs)
 
-        train_ds = make_dataset(df_train)
-        val_ds = make_dataset(df_val)
+
+        train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols)
+        val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=batch_size)
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
@@ -422,7 +405,9 @@ class TSDiffusion(nn.Module):
     @classmethod
     def load(cls, path: str, *args, **kwargs):
         model = cls(*args, **kwargs)
-        model.load_state_dict(torch.load(path, map_location='cpu'))
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.load_state_dict(torch.load(path, map_location=device))
+        model.to(device)
         return model
 
 
