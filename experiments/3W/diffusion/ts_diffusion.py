@@ -176,34 +176,96 @@ class TSDiffusion(nn.Module):
             static_features_cols: list = [f'{f}_relative_max' for f in default_features], 
             epochs: int = 10,
             batch_size: int = 32,
-            lr: float = 1e-3
+            lr: float = 1e-3,
+            test_datasets: int = 2,
             ):
         loader = Loader3W()
         loader.load_stats('stats.pkl')
         for i in range(1, epochs+1):
-            
+            test = pd.DataFrame()
             datasets = loader.preprocess()
             for num_dataset, dataset in enumerate(datasets):
-                print(f'Starting epoch {i}/{epochs} - dataset {num_dataset+1}/{len(loader.stats["ids"])} - Partial Validation Loss: {self.val_loss:.6f}' )
-                tscv = TimeSeriesSplit(n_splits=5)
-                for train_idx, val_idx in tscv.split(dataset):
-                    df_train = dataset.iloc[train_idx]
-                    df_val = dataset.iloc[val_idx]
-                    self.train_model(
-                        df_train=df_train,
-                        df_val=df_val,
-                        feature_cols=feature_cols,
-                        static_features_cols=static_features_cols,
-                        timestamp_col='index',
-                        epochs=1,
-                        batch_size=batch_size,
-                        lr=lr,
-                        window_size=window_size,
-                        device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-                        verbose=False
-                    )
-            print(f'Epoch {i}/{epochs} completed - Training Loss: {self.loss:.6f} - Validation Loss: {self.val_loss:.6f}')
+                if num_dataset < len(loader.stats['ids']) - test_datasets:
+                    print(f'Starting epoch {i}/{epochs} - dataset {num_dataset+1}/{len(loader.stats["ids"])} - Partial Validation Loss: {self.val_loss:.6f}' )
+                    tscv = TimeSeriesSplit(n_splits=5)
+                    for train_idx, val_idx in tscv.split(dataset):
+                        df_train = dataset.iloc[train_idx]
+                        df_val = dataset.iloc[val_idx]
+                        self.train_model(
+                            df_train=df_train,
+                            df_val=df_val,
+                            feature_cols=feature_cols,
+                            static_features_cols=static_features_cols,
+                            timestamp_col='index',
+                            epochs=1,
+                            batch_size=batch_size,
+                            lr=lr,
+                            window_size=window_size,
+                            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+                            verbose=False
+                        )
+                    
+                else:
+                    test.append(dataset)
 
+            test_loss = self.test_model(
+                df_test=dataset,
+                feature_cols=feature_cols,
+                static_features_cols=static_features_cols,
+                timestamp_col='index',
+                window_size=window_size,
+                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            )
+            print(f'Epoch {i}/{epochs} completed - Test Loss: {test_loss:.6f}')
+
+    def test_model(
+        self,
+        df_test: pd.DataFrame,
+        feature_cols: list,
+        static_features_cols: list,
+        timestamp_col: str,
+        window_size: int = None,
+        device: torch.device = None
+    ):
+        device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        def make_dataset(df):
+            if timestamp_col != 'index':
+                df = df.sort_values(timestamp_col).reset_index(drop=True)
+            ts = pd.to_datetime(df[timestamp_col] if timestamp_col != 'index' else df.index).astype('int64') / 1e9
+            data = torch.tensor(df[feature_cols].values, dtype=torch.float32)
+            times = torch.tensor(ts.values, dtype=torch.float32)
+            static = torch.tensor(df[static_features_cols].values, dtype=torch.float32) if static_features_cols else None
+            if window_size is None or window_size >= len(df):
+                seqs = data.unsqueeze(0)
+                ts_seqs = times.unsqueeze(0)
+                stat_seqs = static.unsqueeze(0) if static is not None else None
+            else:
+                n_ws = len(df) - window_size + 1
+                seqs = torch.stack([data[i:i+window_size] for i in range(n_ws)])
+                ts_seqs = torch.stack([times[i:i+window_size] for i in range(n_ws)])
+                stat_seqs = torch.stack([static[i] for i in range(n_ws)]) if static is not None else None
+            if stat_seqs is None:
+                return TensorDataset(seqs, ts_seqs)
+            return TensorDataset(seqs, ts_seqs, stat_seqs)
+
+        test_ds = make_dataset(df_test)
+        test_loader = DataLoader(test_ds, batch_size=1)
+        self.to(device).eval()
+        total_loss = 0.0
+        with torch.no_grad():
+            for batch in test_loader:
+                x, ts_batch = batch[0].to(device), batch[1].to(device)
+                s = batch[2].to(device) if len(batch) > 2 else None
+                t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
+                noise = torch.randn_like(x)
+                ab = self.alpha_bar[t].view(-1, 1, 1)
+                x_t = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
+                eps_pred = self.forward(x_t, t, timestamps=ts_batch, static_feats=s)
+                loss = F.mse_loss(eps_pred, noise)
+                total_loss += loss.item() * x.size(0)
+        avg_loss = total_loss / len(test_ds)
+        return avg_loss
+    
     def train_model(
         self,
         df_train: pd.DataFrame,
