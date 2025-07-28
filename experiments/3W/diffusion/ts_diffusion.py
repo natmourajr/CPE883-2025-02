@@ -23,9 +23,9 @@ class Time2Vec(nn.Module):
 
     def forward(self, timestamps: torch.Tensor, device = None) -> torch.Tensor:
         timestamps = timestamps.to(device)
-        t0   = timestamps.min(dim=1, keepdim=True)[0]
-        span = timestamps.max(dim=1, keepdim=True)[0] - t0 + 1e-8
-        pos  = (timestamps - t0) / span   
+        pos = (timestamps - timestamps.min(dim=1, keepdim=True)[0]) / (
+            timestamps.max(dim=1, keepdim=True)[0] - timestamps.min(dim=1, keepdim=True)[0] + 1e-8
+        )
         v0 = self.w0 * pos + self.b0
         vp = torch.sin(pos.unsqueeze(-1) * self.w + self.b)
         if device is not None:
