@@ -2,7 +2,7 @@
 datasets/
 
 # Repository paths
-3w_data/
+dataloaders/benchmark/3w_dataset/data/
 
 
 # Byte-compiled / optimized / DLL files
