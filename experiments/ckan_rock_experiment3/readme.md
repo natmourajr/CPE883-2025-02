@@ -21,13 +21,13 @@ Implementar e avaliar uma arquitetura convolucional com ativações KAN 2D, capa
 ```plaintext
 Input: 128×128×1
 
-→ CKANConv2DReal(1 → 16)        # Conv2D(3×3) + KANActivation(16)
+→ CKANConv2DReal(1 → 16)        # KAN_Convolutional_Layer(3×3) + KANActivation(16)
 → Identity (sem pooling)
 
-→ CKANConv2DReal(16 → 32)       # Conv2D(3×3) + KANActivation(32)
+→ CKANConv2DReal(16 → 32)       # KAN_Convolutional_Layer(3×3) + KANActivation(32)
 → Identity (sem pooling)
 
-→ CKANConv2DReal(32 → 64)       # Conv2D(3×3) + KANActivation(64)
+→ CKANConv2DReal(32 → 64)       # KAN_Convolutional_Layer(3×3) + KANActivation(64)
 → Identity (sem pooling)
 
 → Conv2D(64 → 3)            # Camada final (logits por classe)
