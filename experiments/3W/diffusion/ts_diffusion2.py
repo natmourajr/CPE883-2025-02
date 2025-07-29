@@ -12,32 +12,41 @@ from sklearn.model_selection import TimeSeriesSplit
 
 
 class Time2Vec(nn.Module):
-    """
-    Time2Vec positional encoding for time series.
-    Produz embeddings senoidais com base em timestamps.
-    """
-    def __init__(self, dim: int):
+    """Embedding cíclico rápido (hora do dia + dia da semana)."""
+    SECS_IN_DAY = 86_400.0
+    SECS_INV    = 1.0 / SECS_IN_DAY   # 1/86400
+    DAYS_INV    = 1.0 / 7.0           # 1/7
+
+    def __init__(self):
         super().__init__()
-        self.dim = dim
         self.w0 = nn.Parameter(torch.randn(1))
         self.b0 = nn.Parameter(torch.randn(1))
-        self.w = nn.Parameter(torch.randn(dim - 1))
-        self.b = nn.Parameter(torch.randn(dim - 1))
+        self.w  = nn.Parameter(torch.randn(2))
+        self.b  = nn.Parameter(torch.randn(2))
 
-    def forward(self, timestamps: torch.Tensor, device=None) -> torch.Tensor:
-        # timestamps: (batch, seq_len) em segundos
-        if device is None:
-            device = timestamps.device
-        # Normaliza [0,1]
-        pos = (timestamps - timestamps.min(dim=1, keepdim=True)[0]) / (
-            timestamps.max(dim=1, keepdim=True)[0] - timestamps.min(dim=1, keepdim=True)[0] + 1e-8
-        )
-        # Linear
-        v0 = self.w0 * pos + self.b0  # (batch, seq_len)
-        # Senoidal
-        vp = torch.sin(pos.unsqueeze(-1) * self.w + self.b)  # (batch, seq_len, dim-1)
-        return torch.cat([v0.unsqueeze(-1), vp], dim=-1)  # (batch, seq_len, dim)
+    def forward(self, ts: torch.Tensor) -> torch.Tensor:
+        """
+        ts: segundos Unix  (float32/64 ou int64)  shape (B,T)
+        devolve: (B,T,4)
+        """
+        # 1) converte p/ float32 uma única vez
+        ts_f = ts.to(dtype=torch.float32)
 
+        # 2) hora do dia  (0‑1)
+        secs_norm = torch.remainder(ts_f, self.SECS_IN_DAY) * self.SECS_INV
+
+        # 3) dia da semana  (0‑1)
+        #    floor(ts/86400) % 7  →  remainder( … , 7 )
+        dow_norm  = torch.remainder(ts_f.mul_(self.DAYS_INV), 7.0) * self.DAYS_INV
+        #           ^ in‑place multiplica por 1/7 — evita uma divisão
+
+        # 4) concatena sem stack (menos alocação)
+        pos = torch.stack((secs_norm, dow_norm), dim=-1)    # (B,T,2)
+
+        v0 = self.w0 * pos + self.b0                        # (B,T,2)
+        vp = torch.sin(pos * self.w + self.b)               # (B,T,2)
+
+        return torch.cat((v0, vp), dim=-1)                  # (B,T,4)                  # (B,T,4)
 
 class TSDiffusion(nn.Module):
     """
@@ -47,6 +56,7 @@ class TSDiffusion(nn.Module):
     def __init__(
         self,
         in_channels: int,
+        latent_dim: int = None,
         model_dim: int = 64,
         hidden_dim: int = 128,
         num_steps: int = 1000,
@@ -59,17 +69,30 @@ class TSDiffusion(nn.Module):
         self.val_loss = float('inf')
         self.model_dim = model_dim
         self.num_steps = num_steps
+        self.latent_dim = latent_dim or in_channels
+        self.in_channels = in_channels
+        if latent_dim is not None:
+            self.encoder = nn.Sequential(
+                nn.Linear(in_channels, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, latent_dim),
+            )
+            self.decoder = nn.Sequential(
+                nn.Linear(latent_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, in_channels),
+            )
         # Projeções
-        self.input_proj = nn.Linear(in_channels, model_dim)
-        self.pos_enc = Time2Vec(pos_dim)
-        self.pos_proj = nn.Linear(pos_dim, model_dim)
+        self.input_proj = nn.Linear(self.latent_dim, model_dim)
+        self.pos_enc = Time2Vec()
+        self.pos_proj = nn.Linear(4, model_dim)
         self.static_dim = static_dim
         if static_dim > 0:
             self.static_proj = nn.Sequential(
                 nn.Linear(static_dim, model_dim),
                 nn.ReLU()
             )
-        self.output_proj = nn.Linear(model_dim, in_channels)
+        self.output_proj = nn.Linear(model_dim, self.latent_dim)
         # Transformer
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=model_dim, nhead=n_heads, dim_feedforward=hidden_dim
@@ -87,7 +110,8 @@ class TSDiffusion(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         timestamps: torch.Tensor = None,
-        static_feats: torch.Tensor = None
+        static_feats: torch.Tensor = None,
+        already_latent: bool=False,
     ) -> torch.Tensor:
         """
         Args:
@@ -99,10 +123,12 @@ class TSDiffusion(nn.Module):
         b, seq_len, _ = x.shape
         device = x.device
         # Embedding de entrada
+        if hasattr(self, 'encoder') and not already_latent:
+            x = self.encoder(x)
         h = self.input_proj(x)
         # Positional encoding via Time2Vec
         if timestamps is not None:
-            pe = self.pos_enc(timestamps, device=device)  # (b, seq_len, pos_dim)
+            pe = self.pos_enc(timestamps)
             h = h + self.pos_proj(pe)
         # Static features
         if static_feats is not None and self.static_dim > 0:
@@ -113,7 +139,10 @@ class TSDiffusion(nn.Module):
         h = self.transformer(h)
         h = h.permute(1, 0, 2)  # (b, seq_len, model_dim)
         # Previsão de ruído
-        return self.output_proj(h)
+        eps_pred = self.output_proj(h)
+        if hasattr(self,'decoder') and not already_latent:
+            eps_pred = self.decoder(eps_pred)
+        return eps_pred
 
     @torch.no_grad()
     def sample(
@@ -138,6 +167,9 @@ class TSDiffusion(nn.Module):
             a, ab = self.alpha[i], self.alpha_bar[i]
             noise = torch.randn_like(x) if i > 0 else torch.zeros_like(x)
             x = (1 / torch.sqrt(a)) * (x - ((1 - a) / torch.sqrt(1 - ab)) * eps) + torch.sqrt(self.beta[i]) * noise
+        # decodifica para o espaço original
+        if hasattr(self, 'decoder'):
+            x = self.decoder(x)
         return x
 
     @torch.no_grad()
@@ -157,6 +189,8 @@ class TSDiffusion(nn.Module):
         steps = sampling_steps or self.num_steps
         # Inicialização: ruído nos gaps
         noise = torch.randn_like(x_obs, device=device)
+        if hasattr(self, 'encoder'):
+            x_obs = self.encoder(x_obs)
         x = x_obs * mask + noise * (1 - mask)
         b = x_obs.size(0)
         for i in reversed(range(steps)):
@@ -167,7 +201,7 @@ class TSDiffusion(nn.Module):
             if i > 0:
                 x_prev = x_prev + torch.sqrt(self.beta[i]) * torch.randn_like(x)
             x = x_prev * (1 - mask) + x_obs * mask
-        return x
+        return self.decoder(x) if hasattr(self, 'decoder') else x
 
     def train3W(
             self, 
@@ -206,7 +240,7 @@ class TSDiffusion(nn.Module):
                         )
                     
                 else:
-                    test.append(dataset)
+                    test = pd.concat([test, dataset], ignore_index=True)
 
             test_loss = self.test_model(
                 df_test=dataset,

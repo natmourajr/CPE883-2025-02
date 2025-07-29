@@ -12,40 +12,43 @@ sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 from loader import Loader3W
 from sklearn.model_selection import TimeSeriesSplit
 
-def add_nan_hooks(model):
-    """
-    Imprime qual módulo gerou o primeiro NaN/Inf nos gradientes
-    (funciona mesmo com autocast/GradScaler).
-    """
-    def hook(mod, grad_in, grad_out):
-        bad_in  = any(g is not None and not torch.isfinite(g).all() for g in grad_in)
-        bad_out = any(g is not None and not torch.isfinite(g).all() for g in grad_out)
-        if bad_in or bad_out:
-            raise RuntimeError(f"‼️  NaN/Inf no gradiente de:  {mod.__class__.__name__}")
-    for m in model.modules():
-        if isinstance(m, (nn.Linear, nn.Conv1d, nn.Conv2d)):
-            m.register_full_backward_hook(hook)
-
 class Time2Vec(nn.Module):
-    """Senoidal positional encoding."""
-    def __init__(self, dim: int):
+    """Embedding cíclico rápido (hora do dia + dia da semana)."""
+    SECS_IN_DAY = 86_400.0
+    SECS_INV    = 1.0 / SECS_IN_DAY   # 1/86400
+    DAYS_INV    = 1.0 / 7.0           # 1/7
+
+    def __init__(self):
         super().__init__()
         self.w0 = nn.Parameter(torch.randn(1))
         self.b0 = nn.Parameter(torch.randn(1))
-        self.w  = nn.Parameter(torch.randn(dim - 1))
-        self.b  = nn.Parameter(torch.randn(dim - 1))
+        self.w  = nn.Parameter(torch.randn(2))
+        self.b  = nn.Parameter(torch.randn(2))
 
-    def forward(self, timestamps: torch.Tensor, device = None) -> torch.Tensor:
-        timestamps = timestamps.to(device)
-        pos = (timestamps - timestamps.min(dim=1, keepdim=True)[0]) / (
-            timestamps.max(dim=1, keepdim=True)[0] - timestamps.min(dim=1, keepdim=True)[0] + 1e-8
-        )
-        v0 = self.w0 * pos + self.b0
-        vp = torch.sin(pos.unsqueeze(-1) * self.w + self.b)
-        if device is not None:
-            v0 = v0.to(device)
-            vp = vp.to(device)
-        return torch.cat([v0.unsqueeze(-1), vp], dim=-1)
+    def forward(self, ts: torch.Tensor) -> torch.Tensor:
+        """
+        ts: segundos Unix  (float32/64 ou int64)  shape (B,T)
+        devolve: (B,T,4)
+        """
+        # 1) converte p/ float32 uma única vez
+        ts_f = ts.to(dtype=torch.float32)
+
+        # 2) hora do dia  (0‑1)
+        secs_norm = torch.remainder(ts_f, self.SECS_IN_DAY) * self.SECS_INV
+
+        # 3) dia da semana  (0‑1)
+        #    floor(ts/86400) % 7  →  remainder( … , 7 )
+        dow_norm  = torch.remainder(ts_f.mul_(self.DAYS_INV), 7.0) * self.DAYS_INV
+        #           ^ in‑place multiplica por 1/7 — evita uma divisão
+
+        # 4) concatena sem stack (menos alocação)
+        pos = torch.stack((secs_norm, dow_norm), dim=-1)    # (B,T,2)
+
+        v0 = self.w0 * pos + self.b0                        # (B,T,2)
+        vp = torch.sin(pos * self.w + self.b)               # (B,T,2)
+
+        return torch.cat((v0, vp), dim=-1)                  # (B,T,4)                  # (B,T,4)
+
 class DiffTimeEmbedding(nn.Module):
     """
     Sinusoidal timestep embedding (estilo Vaswani et al.) + projeção linear.
@@ -109,8 +112,7 @@ class TSDiffusion(nn.Module):
         num_steps: int = 1000,
         n_heads: int = 4,
         n_layers: int = 4,
-        static_dim: int = 0,
-        pos_dim: int = 16,
+        static_dim: int = 0
     ):
         super().__init__()
         self.val_loss = float('inf')
@@ -155,8 +157,8 @@ class TSDiffusion(nn.Module):
             )
         # Projeções
         self.input_proj = nn.Linear(self.latent_dim, model_dim)
-        self.pos_enc = Time2Vec(pos_dim)
-        self.pos_proj = nn.Linear(pos_dim, model_dim)
+        self.pos_enc = Time2Vec()
+        self.pos_proj = nn.Linear(4, model_dim)
         self.static_dim = static_dim
         self.t_embed = DiffTimeEmbedding(model_dim)
         if static_dim > 0:
@@ -453,7 +455,7 @@ class TSDiffusion(nn.Module):
                 # ---------- L'_2  (Diffusion MSE) ----------
                 L2 = F.mse_loss(eps_pred, noise)
                 # ---------- L1  (log-likelihood de pontos observados) ----------
-                '''lam_t  = F.softplus(self.lambda_head(state))  # (B,T,1)  λ>=0
+                lam_t  = F.softplus(self.lambda_head(state))  # (B,T,1)  λ>=0
                 mu_x   = self.mean_head(state)                   # (B,T,latent_dim)
                 # estamos no espaço latente, então use x (já latente) e var=1
                 log_px = -0.5 * ((x_lat - mu_x)**2).sum(-1, keepdim=True)
@@ -489,8 +491,7 @@ class TSDiffusion(nn.Module):
                 # ---------- L4 ----------
                 if torch.isnan(L4):
                     raise RuntimeError("NaN em L4")
-                loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4'''
-                loss = L2    
+                loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4    
                 if not torch.isfinite(loss):
                     # imprime os componentes para saber qual explodiu
                     print("L1:", L1.item(), "L2:", L2.item(),
@@ -499,6 +500,12 @@ class TSDiffusion(nn.Module):
                 
                 # ─── backward + atualização em fp32 ─────────────────────────────
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
+        # se ainda tiver gradientes Inf/NaN, aborta aqui
+                for p in self.parameters():
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        raise RuntimeError("gradiente Inf/NaN detectado")
+                scaler.step(optimizer)                     # 4️⃣ aplica passo
+                scaler.update()                            # 5️⃣ ajusta escala
                 total_train += loss.item() * x.size(0)
             total_val = 0.0
             self.eval()
