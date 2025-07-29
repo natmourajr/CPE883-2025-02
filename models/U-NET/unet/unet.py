@@ -1,7 +1,7 @@
 """
 Surrupiado de:
 Stolen from:
-    https://github.com/labmlai/annotated_deep_learning_paper_implementations/blob/master/labml_nn/diffusion/stable_diffusion/model/unet.py
+  https://github.com/labmlai/annotated_deep_learning_paper_implementations/blob/master/labml_nn/diffusion/stable_diffusion/model/unet.py
 
 ---
 title: U-Net for Stable Diffusion
@@ -12,7 +12,7 @@ summary: >
 #  U-Net for [Stable Diffusion](../index.html)
 
 This implements the U-Net that
- gives $\epsilon_\text{cond}(x_t, c)$
+ gives $\\epsilon_\\text{cond}(x_t, c)$
 
 We have kept to the model definition and naming unchanged from
 [CompVis/stable-diffusion](https://github.com/CompVis/stable-diffusion)
