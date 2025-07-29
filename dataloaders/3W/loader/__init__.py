@@ -73,11 +73,12 @@ class Loader3W(object):
                 if well not in self.stats['wells']:
                     raise ValueError(f'Well {well} not found in stats')
                 for f in self.stats['features']:
-                    dataset.loc[dataset['well']==well, f] = dataset.loc[dataset['well']==well, f].fillna(self.stats['wells'][well][f]['mean'])
+                    #dataset.loc[dataset['well']==well, f] = dataset.loc[dataset['well']==well, f].fillna(self.stats['wells'][well][f]['mean'])
                     dataset.loc[dataset['well']==well, f] -= self.stats['wells'][well][f]['mean']
                     if self.stats['wells'][well][f]['std'] != 0:
                         dataset.loc[dataset['well']==well, f] /= self.stats['wells'][well][f]['std']
-                    dataset.loc[dataset['well']==well, f'{f}_relative_max'] = self.stats['wells'][well][f]['relative_max']
+                    dataset.loc[dataset['well']==well, f'{f}_relative_max'] = 0.0 if np.isnan(self.stats['wells'][well][f]['relative_max']) else \
+                        self.stats['wells'][well][f]['relative_max']
                 dataset.loc[dataset['well']==well, 'state'] = dataset.loc[dataset['well']==well, 'state'].fillna(0)
                 
             for s in range(10):

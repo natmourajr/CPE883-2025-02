@@ -6,6 +6,7 @@ import math
 from torch.utils.data import TensorDataset, DataLoader
 import sys
 import os
+import numpy as np
 
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 from loader import Loader3W
@@ -14,24 +15,21 @@ from sklearn.model_selection import TimeSeriesSplit
 
 class Time2Vec(nn.Module):
     """Senoidal positional encoding."""
-    def __init__(self, dim: int):
+    def __init__(self):
         super().__init__()
         self.w0 = nn.Parameter(torch.randn(1))
         self.b0 = nn.Parameter(torch.randn(1))
-        self.w  = nn.Parameter(torch.randn(dim - 1))
-        self.b  = nn.Parameter(torch.randn(dim - 1))
+        # para duas features cíclicas
+        self.w  = nn.Parameter(torch.randn(2))
+        self.b  = nn.Parameter(torch.randn(2))
 
-    def forward(self, timestamps: torch.Tensor, device = None) -> torch.Tensor:
-        timestamps = timestamps.to(device)
-        pos = (timestamps - timestamps.min(dim=1, keepdim=True)[0]) / (
-            timestamps.max(dim=1, keepdim=True)[0] - timestamps.min(dim=1, keepdim=True)[0] + 1e-8
-        )
-        v0 = self.w0 * pos + self.b0
-        vp = torch.sin(pos.unsqueeze(-1) * self.w + self.b)
-        if device is not None:
-            v0 = v0.to(device)
-            vp = vp.to(device)
-        return torch.cat([v0.unsqueeze(-1), vp], dim=-1)
+    def forward(self, timestamps: torch.Tensor) -> torch.Tensor:
+        secs_of_day = (timestamps % 86_400) / 86_400
+        day_of_week = ((timestamps // 86_400) % 7) / 7
+        pos = torch.stack([secs_of_day, day_of_week], dim=-1)   # (B,T,2)
+        v0 = self.w0 * pos + self.b0                            # (B,T,2)
+        vp = torch.sin(pos * self.w + self.b)                   # (B,T,2)
+        return torch.cat([v0, vp], dim=-1)                      # (B,T,4)
 
 class DiffTimeEmbedding(nn.Module):
     """
@@ -86,6 +84,7 @@ class TSDiffusion(nn.Module):
     TS-Diffusion com forward, sample e impute alinhados ao train_model.
     """
     default_features = ['ABER-CKP','P-ANULAR','P-PDG','T-TPT','T-MON-CKP','T-PDG','T-TPT']
+    EPS = 1e-5
     def __init__(
         self,
         in_channels: int,
@@ -95,7 +94,6 @@ class TSDiffusion(nn.Module):
         num_steps: int = 1000,
         n_heads: int = 4,
         n_layers: int = 4,
-        pos_dim: int = 16,
         static_dim: int = 0
     ):
         super().__init__()
@@ -104,6 +102,30 @@ class TSDiffusion(nn.Module):
         self.num_steps = num_steps
         self.latent_dim = latent_dim or in_channels
         self.in_channels = in_channels
+        # Estado latente que sai do decoder ou do último Transformer
+        # Dimensão = model_dim
+        head_dim = self.model_dim
+
+        # (a) λ(t)  — intensity do ponto de observação
+        self.lambda_head = nn.Sequential(
+            nn.Linear(head_dim, head_dim // 2),
+            nn.ReLU(),
+            nn.Linear(head_dim // 2, 1)       # escalar
+        )
+
+        # (b) μ_x(t)  — média gaussiana para L1
+        self.mean_head = nn.Linear(head_dim, self.latent_dim)
+
+        # (c) μ_Tmax  — previsão do horizonte da série
+        self.tmax_head = nn.Sequential(
+            nn.Linear(head_dim, head_dim // 2),
+            nn.ReLU(),
+            nn.Linear(head_dim // 2, 1)       # escalar
+        )
+
+        # (d) m_b  — probabilidade de observação (Bernoulli) para L4
+        self.miss_head = nn.Linear(head_dim, 1)
+
         if latent_dim is not None:
             self.encoder = nn.Sequential(
                 nn.Linear(in_channels, hidden_dim),
@@ -117,8 +139,8 @@ class TSDiffusion(nn.Module):
             )
         # Projeções
         self.input_proj = nn.Linear(self.latent_dim, model_dim)
-        self.pos_enc = Time2Vec(pos_dim)
-        self.pos_proj = nn.Linear(pos_dim, model_dim)
+        self.pos_enc = Time2Vec()
+        self.pos_proj = nn.Linear(4, model_dim)
         self.static_dim = static_dim
         self.t_embed = DiffTimeEmbedding(model_dim)
         if static_dim > 0:
@@ -145,7 +167,8 @@ class TSDiffusion(nn.Module):
         t: torch.Tensor,
         timestamps: torch.Tensor = None,
         static_feats: torch.Tensor = None,
-        already_latent: bool=False
+        already_latent: bool=False,
+        return_state: bool=True
     ) -> torch.Tensor:
         """
         Args:
@@ -162,7 +185,7 @@ class TSDiffusion(nn.Module):
         h = self.input_proj(x)
         # Positional encoding via Time2Vec
         if timestamps is not None:
-            pe = self.pos_enc(timestamps, device=device)  # (b, seq_len, pos_dim)
+            pe = self.pos_enc(timestamps)  # (b, seq_len, pos_dim)
             h = h + self.pos_proj(pe)
 
 
@@ -176,11 +199,15 @@ class TSDiffusion(nn.Module):
         h = h.permute(1, 0, 2)  # (seq_len, b, model_dim)
         h = self.transformer(h)
         h = h.permute(1, 0, 2)  # (b, seq_len, model_dim)
-        h = self.output_proj(h)
-        # 8) decoder latente → original
-        if hasattr(self, 'decoder') and not already_latent:
-            h = self.decoder(h)
-        return h
+        state = h                              # (B,T,model_dim)
+        eps_pred = self.output_proj(h)         # ruído no latente
+
+        if hasattr(self,'decoder') and not already_latent:
+            eps_pred = self.decoder(eps_pred)
+
+        if return_state:
+            return eps_pred, state
+        return eps_pred
 
     @torch.no_grad()
     def sample(
@@ -200,7 +227,7 @@ class TSDiffusion(nn.Module):
         x = torch.randn(batch_size, seq_len, self.latent_dim, device=device)
         for i in reversed(range(steps)):
             t = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            eps = self.forward(x, t, timestamps=timestamps, static_feats=static_feats, already_latent=True)
+            eps = self.forward(x, t, timestamps=timestamps, static_feats=static_feats, already_latent=True, return_state=False)
             a, ab = self.alpha[i], self.alpha_bar[i]
             noise = torch.randn_like(x) if i > 0 else torch.zeros_like(x)
             x = (1 / torch.sqrt(a)) * (x - ((1 - a) / torch.sqrt(1 - ab)) * eps) + torch.sqrt(self.beta[i]) * noise
@@ -236,7 +263,7 @@ class TSDiffusion(nn.Module):
         b = z.size(0)
         for i in reversed(range(steps)):
             t   = torch.full((b,), i, device=device, dtype=torch.long)
-            eps = self.forward(z, t, timestamps=timestamps, static_feats=static_feats, already_latent=True)
+            eps = self.forward(z, t, timestamps=timestamps, static_feats=static_feats, already_latent=True, return_state=False)
             a, ab = self.alpha[i], self.alpha_bar[i]
             z     = (1 / torch.sqrt(a)) * (z - ((1 - a) / torch.sqrt(1 - ab)) * eps)
             if i > 0:
@@ -311,12 +338,16 @@ class TSDiffusion(nn.Module):
         total_loss = 0.0
         with torch.no_grad():
             for batch in test_loader:
-                x, ts_batch = batch[0].to(device), batch[1].to(device)
-                s = batch[2].to(device) if len(batch) > 2 else None
-                t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
+                if len(batch) == 4:
+                    x, ts_batch, m, s = batch
+                else:                               # caso não haja static
+                    x, ts_batch, m = batch;  s = None
+                x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                if s is not None: s = s.to(device)
+                t = torch.randint(1, self.num_steps, (x.size(0),), device=device)
                 noise = torch.randn_like(x)
                 ab = self.alpha_bar[t].view(-1, 1, 1)
-                x_t = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
+                x_t = torch.sqrt(ab + self.EPS) * x + torch.sqrt(1 - ab  + self.EPS) * noise
                 eps_pred = self.forward(x_t, t, timestamps=ts_batch, static_feats=s)
                 loss = F.mse_loss(eps_pred, noise)
                 total_loss += loss.item() * x.size(0)
@@ -328,21 +359,27 @@ class TSDiffusion(nn.Module):
         if timestamp_col != 'index':
             df = df.sort_values(timestamp_col).reset_index(drop=True)
         ts = pd.to_datetime(df[timestamp_col] if timestamp_col != 'index' else df.index).astype('int64') / 1e9
-        data = torch.tensor(df[feature_cols].values, dtype=torch.float32)
+        values_np = df[feature_cols].values   
+        mask_np   = ~pd.isna(values_np) 
+        values_np = np.nan_to_num(values_np, nan=0.0)
+        data  = torch.tensor(values_np, dtype=torch.float32)
+        mask  = torch.tensor(mask_np,  dtype=torch.float32)  # (L,C)
         times = torch.tensor(ts.values, dtype=torch.float32)
         static = torch.tensor(df[static_features_cols].values, dtype=torch.float32) if static_features_cols else None
         if window_size is None or window_size >= len(df):
             seqs = data.unsqueeze(0)
             ts_seqs = times.unsqueeze(0)
             stat_seqs = static[0].unsqueeze(0) if static is not None else None
+            mask_seqs = mask.unsqueeze(0)   # (1,L,C)
         else:
             n_ws = len(df) - window_size + 1
             seqs = torch.stack([data[i:i+window_size] for i in range(n_ws)])
             ts_seqs = torch.stack([times[i:i+window_size] for i in range(n_ws)])
+            mask_seqs = torch.stack([mask[i:i+window_size] for i in range(n_ws)])
             stat_seqs = static[0].unsqueeze(0).repeat(n_ws, 1)  if static is not None else None
         if stat_seqs is None:
-            return TensorDataset(seqs, ts_seqs)
-        return TensorDataset(seqs, ts_seqs, stat_seqs)
+            return TensorDataset(seqs, ts_seqs, mask_seqs)                   # 3 itens
+        return TensorDataset(seqs, ts_seqs, mask_seqs, stat_seqs)   
     
     def train_model(
         self,
@@ -366,32 +403,64 @@ class TSDiffusion(nn.Module):
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=batch_size)
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
-        self.to(device).train()
         for epoch in range(1, epochs + 1):
             total_train = 0.0
             self.train()
             for batch in train_loader:
-                x, ts_batch = batch[0].to(device), batch[1].to(device)
-                s = batch[2].to(device) if len(batch) > 2 else None
-                t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
-                noise = torch.randn_like(x)
+                if len(batch) == 4:
+                    x, ts_batch, m, s = batch
+                else:                               # caso não haja static
+                    x, ts_batch, m = batch;  s = None
+                x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                if s is not None: s = s.to(device)
+                t = torch.randint(1, self.num_steps, (x.size(0),), device=device)
+                noise = torch.randn_like(x, device=device)
                 ab = self.alpha_bar[t].view(-1, 1, 1)
-                x_t = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
-                eps_pred = self.forward(x_t, t, timestamps=ts_batch, static_feats=s)
-                loss = F.mse_loss(eps_pred, noise)
-                optimizer.zero_grad(); loss.backward(); optimizer.step()
+                x_t = torch.sqrt(ab + self.EPS) * x + torch.sqrt(1 - ab + self.EPS) * noise
+                eps_pred, state  = self.forward(x_t, t, timestamps=ts_batch, static_feats=s)
+                # ---------- L'_2  (Diffusion MSE) ----------
+                L2 = F.mse_loss(eps_pred, noise)
+                # ---------- L1  (log-likelihood de pontos observados) ----------
+                x_lat = self.encoder(x) if hasattr(self,'encoder') else x
+                lam_t  = F.softplus(self.lambda_head(state)).to(device)  # (B,T,1)  λ>=0
+                mu_x   = self.mean_head(state)                   # (B,T,latent_dim)
+                # estamos no espaço latente, então use x (já latente) e var=1
+                log_px = -0.5 * ((x_lat - mu_x)**2).sum(-1, keepdim=True)
+                L1     = -(log_px + torch.log(lam_t+1e-8)).mean()
+                # ---------- L3  (horizonte máximo) ----------
+                tN      = ts_batch.max(dim=1, keepdim=True)[0]   # (B,1)
+                mu_Tmax = self.tmax_head(state[:, -1])             # usa último passo
+                L3      = ((tN * 1.1 - mu_Tmax)**2).mean()         # δ = 0.1
+
+                # ----- L4 (máscara) -----
+                # máscara binária: 1 se ao menos um canal está presente no timestep
+                m_t = m.any(dim=2, keepdim=True).float()        # (B, T, 1)
+
+                mb_pred = torch.sigmoid(self.miss_head(state)).to(device)  # (B, T, 1)
+
+                ce = m_t * torch.log(mb_pred + 1e-8) + \
+                    (1 - m_t) * torch.log(1 - mb_pred + 1e-8)
+                L4 = -ce.mean()
+                # ---------- Loss total ----------
+                lam = [0.4, 0.4, 0.1, 0.1]
+                loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4              
+                optimizer.zero_grad(); loss.backward(); torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0); optimizer.step()
                 total_train += loss.item() * x.size(0)
             total_val = 0.0
             self.eval()
             with torch.no_grad():
                 for batch in val_loader:
-                    x, ts_batch = batch[0].to(device), batch[1].to(device)
-                    s = batch[2].to(device) if len(batch) > 2 else None
-                    t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
-                    noise = torch.randn_like(x)
+                    if len(batch) == 4:
+                        x, ts_batch, m, s = batch
+                    else:
+                        x, ts_batch, m = batch; s = None
+                    x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                    if s is not None: s = s.to(device)
+                    t = torch.randint(1, self.num_steps, (x.size(0),), device=device)
+                    noise = torch.randn_like(x, device = device)
                     ab = self.alpha_bar[t].view(-1, 1, 1)
-                    x_t = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
-                    eps_pred = self.forward(x_t, t, timestamps=ts_batch, static_feats=s)
+                    x_t = torch.sqrt(ab + self.EPS) * x + torch.sqrt(1 - ab + self.EPS) * noise
+                    eps_pred = self.forward(x_t, t, timestamps=ts_batch, static_feats=s, return_state=False)
                     total_val += F.mse_loss(eps_pred, noise).item() * x.size(0)
             if verbose:
                 print(f"Epoch {epoch}/{epochs} — Train Loss: {total_train/len(train_ds):.6f} — Val Loss: {total_val/len(val_ds):.6f}")
