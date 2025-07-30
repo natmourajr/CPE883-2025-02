@@ -620,8 +620,7 @@ class TSDiffusion(nn.Module):
                 ce = m_t * torch.log(mb_pred + 1e-8) + \
                     (1 - m_t) * torch.log(1 - mb_pred + 1e-8)
                 L4 = -ce.mean()
-                print(f"Ep {epoch}: L1={L1.item():.2f} L2={L2.item():.2f} "
-                    f"L3={L3.item():.2f} L4={L4.item():.2f}")
+
                 loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4
                 #loss = lam[1]*L2 + lam[3]*L4
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
@@ -648,6 +647,8 @@ class TSDiffusion(nn.Module):
                 else:
                     self.loss = total_train / len(train_ds)
                     self.val_loss = total_val / len(val_ds)
+        print(f"Ep {epoch}: L1={L1.item():.2f} L2={L2.item():.2f} "
+    f"L3={L3.item():.2f} L4={L4.item():.2f}")
 
     def save(self, path: str):
         torch.save(self.state_dict(), path)
