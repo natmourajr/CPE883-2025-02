@@ -10,6 +10,7 @@ import numpy as np
 import math
 
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
+if os.environ.get('path3WLoader'): sys.path.append(os.environ.get('path3WLoader'))
 from loader import Loader3W
 from sklearn.model_selection import TimeSeriesSplit
 
@@ -372,7 +373,7 @@ class TSDiffusion(nn.Module):
                 mask_latent = (
                     mask.any(dim=-1, keepdim=True)
                         .float()
-                        .repeat(-1, -1, self.latent_dim)
+                        .expand(-1, -1, self.latent_dim)
                 )
         else:
             mask_latent = mask
@@ -402,8 +403,14 @@ class TSDiffusion(nn.Module):
             # 3.1 Reinsere as observações originais
             z = z * (1 - mask_latent) + z_obs * mask_latent
 
-        # 4) Decodifica para o espaço original
-        return self.decoder(z) if hasattr(self, 'decoder') else z
+            # 4) Decodifica para o espaço original
+            if hasattr(self, "decoder"):
+                # ‑‑‑‑ nova linha: estabiliza amplitude do vetor latente
+                z = torch.nn.functional.layer_norm(
+                    z, normalized_shape=(self.latent_dim,)
+                )
+                z = self.decoder(z)
+            return z   
     # ------------------------------------------------------------------
     def _inverse_scale(self, z: torch.Tensor, feature_cols: list) -> np.ndarray:
         """
@@ -796,97 +803,172 @@ class TSDiffusion(nn.Module):
     @staticmethod
     def _pick_window(df: pd.DataFrame,
                     feature_cols: list,
-                    seq_len: int,
-                    min_valid: float = 0.66):
+                    seq_len: int):
         """
         Devolve (df_win, start_idx).
         Garante que cada feature tenha ≥ min_valid*seq_len valores não‑nulos.
         Se não existir tal janela, devolve a primeira (com NaNs mesmos).
         """
-        thresh = int(seq_len * min_valid)
 
         for start in range(0, len(df) - seq_len + 1):
             win = df.iloc[start:start + seq_len][feature_cols]
-            ok  = (win.notna().sum(axis=0) >= thresh).all()
-            if ok:
-                return df.iloc[start:start + seq_len], start
-
-        # fallback: primeira janela
-        return df.iloc[:seq_len], 0
+            return df.iloc[start:start + seq_len], start
     # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # FORECAST RECURSIVO  ---------------------------------------------------
+    # -----------------------------------------------------------------------
+    @torch.no_grad()
+    def forecast_recursive(
+        self,
+        x_hist:      torch.Tensor,   # (B, L0, C)   – série original em z‑score
+        t_hist:      torch.Tensor,   # (B, L0)      – segundos normalizados 0‑1
+        window_size: int,            # comprimento da janela deslizante
+        n_future:    int,            # passos a prever
+        delta_t:     float = 1.0,    # espaçamento real em segundos
+        static_feats: torch.Tensor = None,
+        sampling_steps: int = None,
+    ):
+        """
+        Gera sequência recursivamente, 1 passo por vez, usando janela deslizante.
+        Retorna (times_full, values_full) – ambos com shape (B, L0+n_future, C)
+        """
+        self.eval()
+        device = x_hist.device
+        B, L0, C = x_hist.shape
+        assert L0 >= window_size, "histórico deve ter ≥ window_size"
+
+        # listas para acumular
+        times_list  = [t_hist.clone()]            # cada item shape (B, Li)
+        values_list = [x_hist.clone()]
+
+        # prepara static feats
+        if static_feats is not None:
+            static_feats = static_feats.to(device)
+            if static_feats.dim() == 1:
+                static_feats = static_feats.unsqueeze(0)
+
+        # tempo real do último ponto (para avançar)
+        last_t_real = t_hist[:, -1:] * (t_hist[:, -1:] > 0).float()  # já normalizado 0‑1
+
+        for step in range(1, n_future + 1):
+            # --- 1) constrói nova grade temporal --------------------------------
+            #   último real + Δt (aqui Δt já normalizado pela janela original)
+            t_next_real = last_t_real + (delta_t / (delta_t * (L0 - 1)))  # normalizado
+            #   série de índices para a janela atual
+            t_win = torch.cat([times_list[-1][..., -window_size+1:], t_next_real], dim=1)
+
+            # --- 2) dados da janela ---------------------------------------------
+            x_win  = values_list[-1][..., -window_size+1:, :]              # (B, W-1, C)
+            x_pad  = torch.zeros(B, 1, C, device=device, dtype=x_hist.dtype)
+            x_win  = torch.cat([x_win, x_pad], dim=1)                      # (B, W, C)
+
+            mask_win = torch.ones_like(x_win)
+            mask_win[:, -1] = 0.0                                          # último ausente
+
+            # --- 3) imputação de 1 passo ----------------------------------------
+            x_imp = self.impute(
+                x_obs=x_win,
+                mask=mask_win,
+                timestamps=t_win,
+                static_feats=static_feats,
+                sampling_steps=sampling_steps,
+                device=device
+            )
+            x_next = x_imp[:, -1:]                                          # (B,1,C)
+
+            # --- 4) anexa resultado e atualiza referências ----------------------
+            times_list.append(t_next_real)
+            values_list.append(x_next)
+            last_t_real = t_next_real
+
+        # concatena tudo
+        times_full  = torch.cat(times_list,  dim=1)    # (B, L0+n_future)
+        values_full = torch.cat(values_list, dim=1)    # (B, L0+n_future, C)
+        return times_full.cpu().numpy(), values_full.cpu().numpy()
+
 
 # --------------------------------------------------------------------------
-# TEST_SAMPLER NOVO  -------------------------------------------------------
+# TEST_SAMPLER  v2  --------------------------------------------------------
 # --------------------------------------------------------------------------
-@torch.no_grad()
-def test_sampler(
-    self,
-    dataset_idx: int           = 0,
-    feature_cols: list         = None,
-    static_features_cols: list = None,
-    prefix_len: int            = 48,     # pontos conhecidos
-    future_len: int            = 24,     # pontos a gerar
-    delta_t: float             = 60.0,   # mesmo passo usado no treino
-    min_valid: float           = 0.66,   # % de valores não‑nulos em cada col.
-):
-    """
-    Retorna {feature: (real_t, real_val, gen_t, gen_val)} em **z‑score**.
-    """
-    feature_cols = feature_cols or self.default_features
-    static_features_cols = static_features_cols or \
-        [f"{f}_relative_max" for f in self.default_features]
+    @torch.no_grad()
+    def test_sampler(
+        self,
+        dataset_idx: int           = 0,
+        feature_cols: list         = None,
+        static_features_cols: list = None,
+        window_size: int           = 48,     # tamanho da janela usada no passo‑a‑passo
+        prefix_len: int            = 48,     # histórico inicial (≥ window_size)
+        future_len: int            = 24,     # passos a prever recursivamente
+    ):
+        """
+        Retorna {feature: (real_t, real_val, gen_t, gen_val)} em **z‑score**.
+        O futuro é gerado recursivamente, 1 passo por vez, usando janela deslizante.
+        """
+        loader = Loader3W(); loader.load_stats("stats.pkl")
+        df_all = loader.preprocess().send(None).sort_index()
+        # -------- 1. lista de features coerente ------------------------------
+        if feature_cols is None:
+            state_cols = sorted([c for c in df_all.columns if c.startswith("state-")])
+            feature_cols = list(self.default_features) + state_cols
+        if len(feature_cols) != self.in_channels:
+            raise ValueError(f"Modelo espera {self.in_channels} colunas, "
+                            f"mas feature_cols tem {len(feature_cols)}.")
 
-    # --------- carrega dataset -------------------------------------------
-    loader = Loader3W(); loader.load_stats("stats.pkl")
-    datasets = loader.preprocess()
-    if dataset_idx >= len(datasets):
-        raise IndexError("dataset_idx fora do intervalo disponível.")
-    df = datasets[dataset_idx].sort_index()
+        if static_features_cols is None:
+            static_features_cols = [f"{f}_relative_max" for f in self.default_features]
 
-    # --------- escolhe janela com dados suficientes ----------------------
-    df_win, _ = self._pick_window(df, feature_cols, prefix_len, min_valid)
+        # -------- 2. carrega dataset e escolhe janela ------------------------
+        
+        df_win, _ = self._pick_window(df_all, feature_cols, prefix_len)
 
-    # --------- prepara tensores do prefixo -------------------------------
-    ts_prefix = pd.to_datetime(df_win.index)
-    t_secs = (ts_prefix.astype("int64") / 1e9).to_numpy(dtype=np.float32)
-    t_secs -= t_secs[0]                       # começa em zero
-    xs_np = df_win[feature_cols].to_numpy(dtype=np.float32)
-    mask_np = ~np.isnan(xs_np);  xs_np[np.isnan(xs_np)] = 0.0
+        # -------- 3. eixo temporal robusto (segundos) ------------------------
+        t_ns  = df_win.index.astype("int64").to_numpy()      # ns
+        t_sec = (t_ns - t_ns[0]) / 1e9                       # float64
+        t_sec = t_sec.astype(np.float32)                     # ← só aqui vira f32
 
-    t_t = torch.tensor(t_secs[None], device=self.beta.device)          # (1,L0)
-    x_t = torch.tensor(xs_np[None],  device=self.beta.device)          # (1,L0,C)
+        # delta_t real (última diferença não‑nula)
+        diffs = np.diff(t_sec)
+        delta_real = float(diffs[diffs > 0].min()) if (diffs > 0).any() else 1.0
 
-    # --------- static feats ---------------------------------------------
-    stat = None
-    if static_features_cols and self.static_dim > 0:
-        stat_np = (
-            pd.to_numeric(df_win.iloc[0][static_features_cols], errors="coerce")
-              .fillna(0.).to_numpy(dtype=np.float32)
+        # normaliza 0‑1 como no treino
+        t_norm = t_sec / t_sec[-1] if t_sec[-1] > 0 else t_sec
+
+        # -------- 4. dados e máscara ----------------------------------------
+        x_np = df_win[feature_cols].to_numpy(dtype=np.float32)
+        x_np[np.isnan(x_np)] = 0.0
+        x_t  = torch.tensor(x_np[None], device=self.beta.device)  # (1,L0,C)
+        t_t  = torch.tensor(t_norm[None], device=self.beta.device)
+
+        # static feats
+        stat = None
+        if static_features_cols and self.static_dim > 0:
+            stat_vals = (
+                pd.to_numeric(df_win.iloc[0][static_features_cols], errors="coerce")
+                .fillna(0.).to_numpy(dtype=np.float32)
+            )
+            stat = torch.tensor(stat_vals).unsqueeze(0).to(self.beta.device)
+
+        # -------- 5. geração recursiva --------------------------------------
+        gen_t, gen_vals = self.forecast_recursive(
+            x_hist=x_t,
+            t_hist=t_t,
+            window_size=window_size,
+            n_future=future_len,
+            delta_t=delta_real,
+            static_feats=stat,
         )
-        stat = torch.tensor(stat_np).unsqueeze(0).to(self.beta.device)  # (1,D)
+        gen_t, gen_vals = gen_t[0], gen_vals[0]                # remove batch
 
-    # --------- continua a série -----------------------------------------
-    gen_t, gen_vals = self.sample_continue(
-        x_prefix=x_t,
-        ts_prefix=t_t,
-        n_future=future_len,
-        delta_t=delta_t,
-        static_feats=stat,
-    )
-    gen_t, gen_vals = gen_t[0], gen_vals[0]        # remove batch dim
-
-    # --------- organiza saída -------------------------------------------
-    out = {}
-    for j, feat in enumerate(feature_cols):
-        out[feat] = (
-            t_secs,                   # prefixo t
-            df_win[feat].values,      # prefixo y (com NaNs)
-            gen_t,                    # eixo completo gerado
-            gen_vals[:, j],           # valores gerados
-        )
-    return out
-
-
+        # -------- 6. saída ---------------------------------------------------
+        out = {}
+        for j, feat in enumerate(feature_cols):
+            out[feat] = (
+                t_norm,                       # tempo real normalizado do prefixo
+                df_win[feat].values,          # valores reais do prefixo
+                gen_t,                        # eixo completo (prefixo+futuro)
+                gen_vals[:, j],               # valores gerados (z‑score)
+            )
+        return out
 
     # ---------------------------------------------------------------------
     # 3)  TESTE DA IMPUTAÇÃO  --------------------------------------------
@@ -951,5 +1033,23 @@ def test_sampler(
         return out
 
 
-
+if __name__ == '__main__':
+    ld = Loader3W()
+    ld.load_stats()
+    ts_diffusion = TSDiffusion(
+        in_channels=17,
+        latent_dim=256,
+        model_dim=256,
+        static_dim=7,
+        hidden_dim=1024,
+        num_steps=1000
+        )   
+    ts_diffusion = ts_diffusion.load('ts_diffusion_3w_ep20.pt',in_channels=17,
+        latent_dim=256,
+        model_dim=256,
+        static_dim=7,
+        hidden_dim=1024,
+        num_steps=1000)
+    ts_diffusion=ts_diffusion.to(torch.device('cuda'))
+    print(ts_diffusion.test_sampler(prefix_len=15,future_len=5, window_size=15))
             
