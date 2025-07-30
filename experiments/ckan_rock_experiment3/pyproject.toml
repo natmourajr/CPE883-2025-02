@@ -1,0 +1,25 @@
+[project]
+name = "ckan_rockSeg"
+version = "0.1.0"
+description = "Segmentação de imagens de microtomografia usando CKAN (Kolmogorov–Arnold Network)"
+authors = [{ name = "Vivian de Carvalho Rodrigues" }]
+readme = "README.md"
+requires-python = ">=3.9"
+
+dependencies = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "numpy",
+    "matplotlib",
+    "scikit-learn",
+    "tqdm",
+    "pykan==0.2.8",
+    "Pillow",
+]
+
+[tool.setuptools]
+packages = ["rock_seg", "rock_seg_loader"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
