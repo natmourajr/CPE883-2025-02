@@ -372,7 +372,7 @@ class TSDiffusion(nn.Module):
                 mask_latent = (
                     mask.any(dim=-1, keepdim=True)
                         .float()
-                        .expand(-1, -1, self.latent_dim)
+                        .repeat(-1, -1, self.latent_dim)
                 )
         else:
             mask_latent = mask
@@ -404,7 +404,27 @@ class TSDiffusion(nn.Module):
 
         # 4) Decodifica para o espaço original
         return self.decoder(z) if hasattr(self, 'decoder') else z
+    # ------------------------------------------------------------------
+    def _inverse_scale(self, z: torch.Tensor, feature_cols: list) -> np.ndarray:
+        """
+        Converte tensor (T,C) em z‑score para escala original usando stats.pkl.
+        Retorna ndarray float64 (T,C).
+        """
+        if not hasattr(self, "_stats_cache"):
+            loader = Loader3W(); loader.load_stats("stats.pkl")
+            self._stats_cache = loader.stats        # memoize
 
+        mu = torch.tensor(
+            [self._stats_cache["mean"][c] for c in feature_cols],
+            dtype=z.dtype, device=z.device
+        )
+        sd = torch.tensor(
+            [self._stats_cache["std"][c]  for c in feature_cols],
+            dtype=z.dtype, device=z.device
+        ).clamp(min=1e-8)                          # evita div/0
+
+        return (z * sd + mu).cpu().numpy()         # (T,C)
+    # ------------------------------------------------------------------
     def train3W(
             self, 
             window_size: int = 600, 
@@ -538,7 +558,65 @@ class TSDiffusion(nn.Module):
         if stat_seqs is None:
             return TensorDataset(seqs, ts_seqs, mask_seqs)                   # 3 itens
         return TensorDataset(seqs, ts_seqs, mask_seqs, stat_seqs)   
-    
+    # --------------------------------------------------------------------------
+    # NOVO MÉTODO: sample_continue --------------------------------------------
+    # --------------------------------------------------------------------------
+    @torch.no_grad()
+    def sample_continue(
+        self,
+        x_prefix: torch.Tensor,      # (B, L0, C)  – dados já conhecidos (z‑score!)
+        ts_prefix: torch.Tensor,     # (B, L0)     – segundos unix norm. 0‑1
+        n_future: int,               # passos a gerar
+        delta_t: float = 1.0,        # espaçamento (mesma unidade usada no treino)
+        static_feats: torch.Tensor = None,
+        sampling_steps: int = None,
+    ):
+        """
+        Continua a série acrescentando `n_future` pontos após o prefixo.
+
+        Retorna:
+            times_full  – (B, L0+n_future)
+            values_full – (B, L0+n_future, C)  (z‑score)
+        """
+        self.eval()
+        device = x_prefix.device
+        B, L0, C = x_prefix.shape
+        L = L0 + n_future
+
+        # ----- grade temporal completa ---------------------------------------
+        last_t = ts_prefix[:, -1:]              # (B,1)
+        fut_grid = torch.arange(
+            1, n_future + 1, device=device, dtype=torch.float32
+        ).unsqueeze(0) * delta_t + last_t       # (B, n_future)
+        ts_full = torch.cat([ts_prefix, fut_grid], dim=1)  # (B, L)
+
+        # normaliza 0‑1 exatamente como _make_dataset()
+        span = ts_full[:, -1:] - ts_full[:, 0:1]
+        ts_full_n = (ts_full - ts_full[:, 0:1]) / span.clamp(min=1.0)
+
+        # ----- tensor de dados + máscara --------------------------------------
+        x_full   = torch.zeros(B, L, C, device=device, dtype=x_prefix.dtype)
+        mask_full = torch.zeros(B, L, C, device=device, dtype=x_prefix.dtype)
+
+        x_full[:, :L0] = x_prefix
+        mask_full[:, :L0] = 1.0                 # prefixo observado
+
+        # static feats opcional
+        if static_feats is not None:
+            static_feats = static_feats.to(device)
+            if static_feats.dim() == 1:
+                static_feats = static_feats.unsqueeze(0)  # (1,D)
+
+        # ----- chama imputação (gera valores onde mask==0) --------------------
+        imputed = self.impute(
+            x_obs=x_full,
+            mask=mask_full,
+            timestamps=ts_full_n,
+            static_feats=static_feats,
+            sampling_steps=sampling_steps,
+            device=device
+        )
+        return ts_full_n.cpu().numpy(), imputed.cpu().numpy()    
 
     def train_model(
         self,
@@ -555,7 +633,7 @@ class TSDiffusion(nn.Module):
         verbose: bool = True
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        lam = [0.01, 0.4, 0.1, 0.1]
+        lam = [0.001, 0.4, 0.05, 0.05]
         train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols)
         val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -662,114 +740,152 @@ class TSDiffusion(nn.Module):
     @torch.no_grad()
     def sample_regular(
         self,
-        batch_size: int         = 1,
-        seq_len: int            = 15,     # grade igual ao window_size
-        delta_t: float          = 1.0,    # passo em segundos
-        static_feats: torch.Tensor = None,  # shape (B, static_dim)
-        sampling_steps: int     = None,
-        device: torch.device    = None,
+        batch_size: int = 1,
+        seq_len:   int = 15,
+        delta_t:   float = 1.0,
+        static_feats: torch.Tensor = None,
+        sampling_steps: int = None,
+        device: torch.device = None,
     ):
         """
-        Gera séries (times, values) para *todas* as features em grade regular.
-        Retorna lista de length=batch_size; cada item = (times, values[T,C])
+        Gera (times, values) — ambos em espaço **normalizado** (z‑score).
         """
         device = device or next(self.parameters()).device
         steps  = min(sampling_steps or self.num_steps, self.num_steps)
 
-        # ---------- reverse‑diffusion ----------
-        z = torch.randn(batch_size, seq_len, self.latent_dim, device=device)
+        # --- dentro de sample_regular ----------------------------------------
         ts_grid = (
             torch.arange(seq_len, device=device, dtype=torch.float32) * delta_t
         ).unsqueeze(0).repeat(batch_size, 1)
 
+        # normaliza: 0‑1 exactamente como em _make_dataset()
+        ts_grid = ts_grid / ts_grid[:, -1:].clamp(min=1.0)
+
+        # estado inicial (ruído)
+        z = torch.randn(batch_size, seq_len, self.latent_dim, device=device)
+
         if static_feats is not None:
             static_feats = static_feats.to(device=device, dtype=torch.float32)
 
+        # reverse‑diffusion
         for i in reversed(range(steps)):
             t = torch.full((batch_size,), i, device=device, dtype=torch.long)
             eps = self.forward(
-                z,
-                t,
-                timestamps=ts_grid,
+                z, t, timestamps=ts_grid,
                 static_feats=static_feats,
-                already_latent=True,
-                return_state=False,
+                already_latent=True
             )
             a, ab = self.alpha[i], self.alpha_bar[i]
             noise = torch.randn_like(z) if i > 0 else torch.zeros_like(z)
-            z = (1 / torch.sqrt(a)) * (z - ((1 - a) / torch.sqrt(1 - ab)) * eps) \
+            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*eps) \
                 + torch.sqrt(self.beta[i]) * noise
 
         if hasattr(self, "decoder"):
-            z = self.decoder(z)  # (B, T, C)
+            z = torch.nn.functional.layer_norm(
+                z, normalized_shape=(self.latent_dim,)
+            )                      # evita “explosão” inicial
+            z = self.decoder(z)      # continua em z‑score
 
-        out = [
-            (ts_grid[b].cpu().numpy(), z[b].cpu().numpy())  # times, values
-            for b in range(batch_size)
-        ]
-        return out
+        return [(ts_grid[b].cpu().numpy(), z[b].cpu().numpy())
+                for b in range(batch_size)]
 
 
-    @torch.no_grad()
-    def test_sampler(
-        self,
-        dataset_idx: int              = 0,
-        feature_cols: list            = None,   # lista completa de features
-        static_features_cols: list    = None,
-        seq_len: int                  = 15,
-        delta_t: float                = 1.0,
-    ):
+
+    # ------------------------------------------------------------------
+    # utilitário: escolhe janela com dados suficientes -----------------
+    @staticmethod
+    def _pick_window(df: pd.DataFrame,
+                    feature_cols: list,
+                    seq_len: int,
+                    min_valid: float = 0.66):
         """
-        Retorna dicionário {feature: (real_times, real_vals, samp_times, samp_vals)}
-        para *todas* as features numéricas.
+        Devolve (df_win, start_idx).
+        Garante que cada feature tenha ≥ min_valid*seq_len valores não‑nulos.
+        Se não existir tal janela, devolve a primeira (com NaNs mesmos).
         """
-        loader = Loader3W(); loader.load_stats("stats.pkl")
-        df = loader.preprocess().send(None).sort_index()
+        thresh = int(seq_len * min_valid)
 
-        feature_cols = feature_cols or self.default_features
-        static_features_cols = static_features_cols or \
-                            [f"{f}_relative_max" for f in self.default_features]
+        for start in range(0, len(df) - seq_len + 1):
+            win = df.iloc[start:start + seq_len][feature_cols]
+            ok  = (win.notna().sum(axis=0) >= thresh).all()
+            if ok:
+                return df.iloc[start:start + seq_len], start
 
-        # ------- janela real do tamanho seq_len -------
-        df_win = df.iloc[:seq_len]
-        times_ts = pd.to_datetime(df_win.index)
-        real_times = (
-            (times_ts.astype("int64") / 1e9) - (times_ts[0].value / 1e9)
+        # fallback: primeira janela
+        return df.iloc[:seq_len], 0
+    # ------------------------------------------------------------------
+
+# --------------------------------------------------------------------------
+# TEST_SAMPLER NOVO  -------------------------------------------------------
+# --------------------------------------------------------------------------
+@torch.no_grad()
+def test_sampler(
+    self,
+    dataset_idx: int           = 0,
+    feature_cols: list         = None,
+    static_features_cols: list = None,
+    prefix_len: int            = 48,     # pontos conhecidos
+    future_len: int            = 24,     # pontos a gerar
+    delta_t: float             = 60.0,   # mesmo passo usado no treino
+    min_valid: float           = 0.66,   # % de valores não‑nulos em cada col.
+):
+    """
+    Retorna {feature: (real_t, real_val, gen_t, gen_val)} em **z‑score**.
+    """
+    feature_cols = feature_cols or self.default_features
+    static_features_cols = static_features_cols or \
+        [f"{f}_relative_max" for f in self.default_features]
+
+    # --------- carrega dataset -------------------------------------------
+    loader = Loader3W(); loader.load_stats("stats.pkl")
+    datasets = loader.preprocess()
+    if dataset_idx >= len(datasets):
+        raise IndexError("dataset_idx fora do intervalo disponível.")
+    df = datasets[dataset_idx].sort_index()
+
+    # --------- escolhe janela com dados suficientes ----------------------
+    df_win, _ = self._pick_window(df, feature_cols, prefix_len, min_valid)
+
+    # --------- prepara tensores do prefixo -------------------------------
+    ts_prefix = pd.to_datetime(df_win.index)
+    t_secs = (ts_prefix.astype("int64") / 1e9).to_numpy(dtype=np.float32)
+    t_secs -= t_secs[0]                       # começa em zero
+    xs_np = df_win[feature_cols].to_numpy(dtype=np.float32)
+    mask_np = ~np.isnan(xs_np);  xs_np[np.isnan(xs_np)] = 0.0
+
+    t_t = torch.tensor(t_secs[None], device=self.beta.device)          # (1,L0)
+    x_t = torch.tensor(xs_np[None],  device=self.beta.device)          # (1,L0,C)
+
+    # --------- static feats ---------------------------------------------
+    stat = None
+    if static_features_cols and self.static_dim > 0:
+        stat_np = (
+            pd.to_numeric(df_win.iloc[0][static_features_cols], errors="coerce")
+              .fillna(0.).to_numpy(dtype=np.float32)
         )
+        stat = torch.tensor(stat_np).unsqueeze(0).to(self.beta.device)  # (1,D)
 
-        # ------- static feats -------
-        if static_features_cols and self.static_dim > 0:
-            stat_vals = (
-                pd.to_numeric(
-                    df_win.iloc[0][static_features_cols], errors="coerce"
-                )                       # força string→NaN→float
-                .fillna(0.0)            # substitui NaN por 0
-                .astype(np.float32)
-                .values
-            )
-            stat = torch.tensor(stat_vals, dtype=torch.float32).unsqueeze(0)
-        else:
-            stat = None
+    # --------- continua a série -----------------------------------------
+    gen_t, gen_vals = self.sample_continue(
+        x_prefix=x_t,
+        ts_prefix=t_t,
+        n_future=future_len,
+        delta_t=delta_t,
+        static_feats=stat,
+    )
+    gen_t, gen_vals = gen_t[0], gen_vals[0]        # remove batch dim
 
-        # ------- série gerada -------
-        samp_times, samp_vals = self.sample_regular(
-            batch_size=1,
-            seq_len=seq_len,
-            delta_t=delta_t,
-            static_feats=stat,
-        )[0]
+    # --------- organiza saída -------------------------------------------
+    out = {}
+    for j, feat in enumerate(feature_cols):
+        out[feat] = (
+            t_secs,                   # prefixo t
+            df_win[feat].values,      # prefixo y (com NaNs)
+            gen_t,                    # eixo completo gerado
+            gen_vals[:, j],           # valores gerados
+        )
+    return out
 
-        # ------- organiza saída -------
-        out = {}
-        for feat in feature_cols:
-            idx = df.columns.get_loc(feat)
-            out[feat] = (
-                real_times.values,                 # shape (T,)
-                df_win[feat].values,               # real
-                samp_times,                        # shape (T,)
-                samp_vals[:, idx],                 # gerado
-            )
-        return out
 
 
     # ---------------------------------------------------------------------
