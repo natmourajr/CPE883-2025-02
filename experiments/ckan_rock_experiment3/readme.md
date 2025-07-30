@@ -1,87 +1,96 @@
-# 🧪 Experimento CKAN com Convoluções KAN (CKANConv2DReal)
+### 🧪 Segmentação de Microtomografia com CKAN — Experimento 3
+Este experimento aplica redes neurais convolucionais com ativações baseadas em splines (CKAN) para a segmentação de imagens de microtomografia de rochas, classificando cada pixel como fundo, rocha ou poro.
 
-Este experimento investiga o uso de camadas convolucionais baseadas em KAN (`CKANConv2DReal`) para segmentação por pixel de imagens de microtomografia de rochas.
 
----
 
-# Segmentação de Imagens de Microtomografia com CKAN (Convoluções 3×3 e Splines 2D)
+### 🎯 Objetivos
+Utilizar camadas convolucionais CKAN para melhorar a expressividade do modelo com poucos parâmetros.
 
-Este projeto tem como objetivo segmentar imagens de microtomografia de rochas em três classes: **fundo**, **rocha** e **poro**, utilizando uma arquitetura baseada em **CKAN** (Kolmogorov–Arnold Networks) com **convoluções 3×3** e **splines 2D**.
+Realizar segmentação em um dataset real, com pré-processamento e visualização integrados.
 
----
+Executar o experimento em ambiente com GPU local, mesmo com restrição de memória.
 
-## 📌 Objetivo
+### 🧠 Arquitetura do Modelo
+A arquitetura é composta por 3 camadas KAN_Convolution com kernel 3x3, seguidas por uma projeção para o número de classes:
+```
+CKAN_CONFIG = {
+    "channels": [1, 4, 8, 16],         # input → ckan1 → ckan2 → ckan3
+    "kernel_size": (3, 3),
+    "stride": (1, 1),
+    "padding": (1, 1),
+    "dilation": (1, 1),
+    "num_classes": 3,                 # fundo, rocha, poro
+    "output_shape": (32, 32)
+}
+```
 
-Implementar e avaliar uma arquitetura convolucional com ativações KAN 2D, capaz de segmentar imagens monocromáticas [128×128] por pixel, mantendo a resolução espacial e explorando o poder expressivo das splines aprendíveis.
+### 📁 Estrutura do Projeto
 
----
+```
+ckan_rockSeg/
+├── main.py                       # Script principal com treino e visualização
+├── rock_seg_loader/
+│   └── rock_dataset_multi.py     # Dataloader para múltiplas amostras (com resize, normalização e máscara)
+├── rock_seg/
+│   ├── model.py                  # Rede CKAN principal
+│   ├── kan_conv.py               # Camadas convolucionais KAN (splines 2D)
+│   ├── convolution.py            # Operações auxiliares (unfold, pad, convolução)
+│   └── config.py                 # Configuração do modelo (CKAN_CONFIG)
+├── mini_dataset.zip              # Conjunto de dados reduzido para teste
+├── pyproject.toml                # Configuração do ambiente com dependências
+└── README.md                     # Documentação do projeto (este arquivo)
+
+```
 
 ## 🧠 Arquitetura do Modelo
 
 ```plaintext
 Input: 128×128×1
 
-→ CKANConv2DReal(1 → 16)        # KAN_Convolutional_Layer(3×3) + KANActivation(16)
-→ Identity (sem pooling)
+→ CKANConv2DReal(1 → 4)        # KAN_Convolutional_Layer(3×3) + KANActivation(16 splines por canal)
+→ Identity (sem downsampling)
 
-→ CKANConv2DReal(16 → 32)       # KAN_Convolutional_Layer(3×3) + KANActivation(32)
-→ Identity (sem pooling)
+→ CKANConv2DReal(4 → 8)        # KAN_Convolutional_Layer(3×3) + KANActivation(32 splines por canal)
+→ Identity (sem downsampling)
 
-→ CKANConv2DReal(32 → 64)       # KAN_Convolutional_Layer(3×3) + KANActivation(64)
-→ Identity (sem pooling)
+→ CKANConv2DReal(8 → 16)       # KAN_Convolutional_Layer(3×3) + KANActivation(64 splines por canal)
+→ Identity (sem downsampling)
 
-→ Conv2D(64 → 3)            # Camada final (logits por classe)
+→ Conv2D(16 → 3)               # Camada final (logits por classe, sem ativação)
 
-Output: 128×128×3
+Output: 32×32×3
 ```
 
 Cada bloco CKANConv2D aplica uma convolução com kernel 3×3 seguida de uma ativação não linear baseada em splines 2D aprendíveis.
 
-## 📁 Estrutura
+### 🖥️ Ambiente de Execução
+Python 3.10+
 
-- `rock_seg/kan_conv.py`: Implementa convoluções KAN com `KANLayer` via `F.unfold`
-- `rock_seg/model.py`: Arquitetura do modelo de segmentação com múltiplas camadas CKAN convolucionais
-- `rock_seg/convolution.py`: Camada de abstração `CKANConv2DReal` que encapsula a lógica de convolução baseada em `KANLayer`
-- `rock_seg/rock_dataset_multi.py`: Dataset com resize para `(128, 128)`, retornando imagem `(1, H, W)` e máscara `(H, W)`
-- `main.py`: Script de treino, avaliação e visualização de segmentações por época
+PyTorch ≥ 2.0
 
----
+pykan==0.2.8
+
+Executado em GPU local (NVIDIA, CUDA 12.0)
+
+### 📊 Resultados Preliminares
+Mesmo com poucas épocas de treino e baixa resolução, o modelo está evoluindo no aprendizado indicando mapeamentos coerentes entre poro, rocha e fundo, como no exemplo abaixo:
+
+<img width="1200" height="400" alt="Resultado_preliminar_res-minima_32x32" src="https://github.com/user-attachments/assets/87ad2f73-d586-4f3b-98e6-33bc435aaece" />
 
 
-## 🧠 Modelo: CKANSegmentationModel
+<img width="640" height="480" alt="Loss" src="https://github.com/user-attachments/assets/0a40038f-e693-448d-94c6-84e4a913235f" />
 
-```python
-Input: (B, 1, 128, 128)
 
-Backbone:
-  - CKANConv2DReal(1, 16)
-  - CKANConv2DReal(16, 32)
-  - CKANConv2DReal(32, 64)
-  - Conv2d(64, 3, kernel_size=1)
 
-Output: (B, 3, 128, 128)
-```
 
-Ativações não-lineares via KANLayer com splines aprendíveis (versão real, pykan==0.2.8)
+### 🔄 Próximos Passos
+Substituir a arquitetura base por uma U-Net com blocos CKAN.
 
-Treinamento com CrossEntropyLoss + Adam
+Aumentar a resolução das imagens de entrada (de 32×32 para 128×128).
 
-Visualização intermediária das segmentações por matplotlib
+Adicionar métricas quantitativas (IoU, Dice Score).
 
-Status
-Este experimento é uma evolução direta do Experimento 2, que utilizava convoluções 1×1 com splines 1D. Agora, adotamos filtros 3×3 com splines 2D, aumentando o poder de representação espacial do modelo.
+Avaliar generalização com separação treino/validação/teste.
 
-## ⚠️ Observações
-Este modelo ainda não está totalmente funcional em GPUs com memória limitada.
-
-Durante os testes, observou-se erro de memória CUDA (out of memory).
-Portanto, é necessário ajustar o modelo (por exemplo, reduzindo número de canais, lotes menores, ou otimizando a implementação) antes de treinos mais longos em GPU.
-
-## 📌 Próximos Passos
-Reduzir o custo computacional das camadas CKANConv2D
-
-Introduzir pooling para reduzir dimensionalidade e profundidade da rede
-
-Testar variantes tipo U-Net com ativações KAN
-
-Separar conjuntos de treino, validação e teste
+### 👩‍🔬 Autora
+Projeto desenvolvido por Vivian de Carvalho Rodrigues, no contexto da disciplina Tópicos Especiais em Machine Learning (CPE883 - 2025/2), utilizando ferramentas de aprendizado profundo aplicadas a imagens de microtomografia.
