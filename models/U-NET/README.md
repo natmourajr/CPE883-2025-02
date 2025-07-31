@@ -1,27 +1,34 @@
 # U-NET 
 
-Implementação da rede U-NET para diffusion model
+Implementação da rede U-NET e Autoencoder para diffusion model (totalmente baseado na implementação do Stable Diffusion).
 
-- Crie um README.md adequado ao Data Loader, explicando o tipo de dados a ser lido
-- Edite o arquivo `pyproject.toml`, e realize as seguintes mudanças:
-    - Altere o `name` para o nome do data loader ou modelo. É importante que esse nome seja um [identificador válido em Python](https://docs.python.org/3/reference/lexical_analysis.html#identifiers), de preferência seguindo a [convenção de nomes para módulos e pacotes](https://peps.python.org/pep-0008/#package-and-module-names)
-    - Ajuste os campos `version`, `description` conforme necessário
-    - Ajuste a versão do python necessária em `requires-python`. Aqui, dê preferência a especificações com >=, tal como `>=3.10`.
-- Renomeie a pasta `template_loader` para o mesmo nome usado como valor de `name` no `pyproject.toml`.
+- Está incluido o modelo U-NET em `models/U-NET/model/unet.py`;
+- O Autoencoder está em `models/U-NET/model/autoencoder.py`;
+- O embedder utilizado é o CLIP e está em `models/U-NET/model/clip_embedder.py`.
+- A parte de atenção, tanto a cross-attention com o texto quanto o spatial transformer para self-attention da imagem, está em `models/U-NET/model/attention.py`.
+- Os samplers (que adicionam o ruído) estão em `models/U-NET/model/samplers`.
+- Vários scripts de ajuda estão em `models/U-NET/scripts`;
+    - Imagem para imagem, texto para imagem e in-painting.
+
+## Como funciona
+- O Autoencoder codifica a imagem de entrada em um espaço latente;
+- O U-NET recebe a imagem, que pode ser um ruído gaussiano no espaço latente
+    - Ele também recebe o texto codificado pelo CLIP através de um cross-attention
+    - Ele usa o self-attention para capturar a relação espacial entre os pixels da imagem
+    - Ele também recebe o timestep do ruído, que é usado para controlar a quantidade de ruído a ser adicionado através de um embedding posicional (senoidal) nas camadas ResNet;
+    - Nem todas as camadas possuem atenção, as camadas com maior resolução costumam não ter cross-attention
+    - Com a informação do timestep, o U-NET tenta prever o ruído que foi adicionado à imagem, e assim remover esse ruído
+- O sampler (DDIM ou DDPM) adiciona o ruído à imagem de acordo com o timestep para treinar o modelo
+    - O DDIM costuma ter menos passos
+- O modelo é treinado para prever o ruído adicionado, e assim aprender a remover, dado um timestep específico que é passado para a ResNet
+- O Autoencoder decodifica a imagem do espaço latente para o espaço de pixels, gerando a imagem final
+
 
 ## Execução de testes
 
 Caso esteja usando uv, basta executar da seguinte forma:
 
 ```bash
-uv run --extra dev pytest
+uv sync
+uv run [arquivo]
 ```
-
-Caso esteja usando somente o `pip` básico para gerencia pacotes, crie um virtualenv e execute os seguintes passos:
-
-```bash
-pip install -e '.[dev]'
-pytest
-```
-
-Para uma descrição mais detalhada sobre `uv` e `pip`, veja o [README do TemplateExperiment](../../experiments/TemplateExperiment/README.md).
