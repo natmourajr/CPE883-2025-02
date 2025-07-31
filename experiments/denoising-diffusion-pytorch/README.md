@@ -2,6 +2,9 @@
 
 Este projeto implementa um experimento mínimo viável de Diffusion Models usando o dataset MNIST para geração de imagens, baseado no repositório [denoising-diffusion-pytorch](https://github.com/lucidrains/denoising-diffusion-pytorch).
 
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/888c1d59-4afb-49be-89fa-a0a9911ba58f" />
+
+
 ## Estrutura do projeto
 
 - `denoising_diffusion_pytorch/`: código principal da biblioteca Diffusion Models (clonado do repositório original).
