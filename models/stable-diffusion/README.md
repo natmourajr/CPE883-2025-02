@@ -1,13 +1,13 @@
-# U-NET 
+# U-NET + Autoencoder (Stable Diffusion)
 
 Implementação da rede U-NET e Autoencoder para diffusion model (totalmente baseado na implementação do Stable Diffusion).
 
-- Está incluido o modelo U-NET em `models/U-NET/model/unet.py`;
-- O Autoencoder está em `models/U-NET/model/autoencoder.py`;
-- O embedder utilizado é o CLIP e está em `models/U-NET/model/clip_embedder.py`.
-- A parte de atenção, tanto a cross-attention com o texto quanto o spatial transformer para self-attention da imagem, está em `models/U-NET/model/attention.py`.
-- Os samplers (que adicionam o ruído) estão em `models/U-NET/model/samplers`.
-- Vários scripts de ajuda estão em `models/U-NET/scripts`;
+- Está incluido o modelo U-NET em `models/stable-diffusion/model/unet.py`;
+- O Autoencoder está em `models/stable-diffusion/model/autoencoder.py`;
+- O embedder utilizado é o CLIP e está em `models/stable-diffusion/model/clip_embedder.py`.
+- A parte de atenção, tanto a cross-attention com o texto quanto o spatial transformer para self-attention da imagem, está em `models/stable-diffusion/model/attention.py`.
+- Os samplers (que adicionam o ruído) estão em `models/stable-diffusion/model/samplers`.
+- Vários scripts de ajuda estão em `models/stable-diffusion/scripts`;
     - Imagem para imagem, texto para imagem e in-painting.
 
 ## Como funciona

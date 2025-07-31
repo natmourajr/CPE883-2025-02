@@ -23,7 +23,7 @@ from typing import Optional, List
 
 import torch
 
-from models.U-NET.latent_diffusion import LatentDiffusion
+from models.stable-diffusion.latent_diffusion import LatentDiffusion
 
 
 class DiffusionSampler:
