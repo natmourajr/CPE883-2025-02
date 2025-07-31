@@ -23,8 +23,8 @@ import numpy as np
 import torch
 
 from labml import monit
-from models.U-NET.latent_diffusion import LatentDiffusion
-from models.U-NET.sampler import DiffusionSampler
+from models.stable-diffusion.latent_diffusion import LatentDiffusion
+from models.stable-diffusion.sampler import DiffusionSampler
 
 
 class DDIMSampler(DiffusionSampler):

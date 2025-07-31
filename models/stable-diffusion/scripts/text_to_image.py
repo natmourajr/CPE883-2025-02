@@ -19,10 +19,10 @@ from pathlib import Path
 import torch
 
 from labml import lab, monit
-from models.U-NET.latent_diffusion import LatentDiffusion
-from models.U-NET.sampler.ddim import DDIMSampler
-from models.U-NET.sampler.ddpm import DDPMSampler
-from models.U-NET.util import load_model, save_images, set_seed
+from models.stable-diffusion.latent_diffusion import LatentDiffusion
+from models.stable-diffusion.sampler.ddim import DDIMSampler
+from models.stable-diffusion.sampler.ddpm import DDPMSampler
+from models.stable-diffusion.util import load_model, save_images, set_seed
 
 
 class Txt2Img:

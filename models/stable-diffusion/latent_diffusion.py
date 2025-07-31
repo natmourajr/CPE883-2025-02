@@ -30,9 +30,9 @@ from typing import List
 import torch
 import torch.nn as nn
 
-from models.U-NET.model.autoencoder import Autoencoder
-from models.U-NET.model.clip_embedder import CLIPTextEmbedder
-from models.U-NET.model.unet import UNetModel
+from models.stable-diffusion.model.autoencoder import Autoencoder
+from models.stable-diffusion.model.clip_embedder import CLIPTextEmbedder
+from models.stable-diffusion.model.unet import UNetModel
 
 
 class DiffusionWrapper(nn.Module):

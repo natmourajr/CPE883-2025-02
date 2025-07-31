@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.U-NET.model.unet_attention import SpatialTransformer
+from models.stable-diffusion.model.unet_attention import SpatialTransformer
 
 
 class UNetModel(nn.Module):

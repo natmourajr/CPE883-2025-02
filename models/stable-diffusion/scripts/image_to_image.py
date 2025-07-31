@@ -18,8 +18,8 @@ from pathlib import Path
 import torch
 
 from labml import lab, monit
-from models.U-NET.sampler.ddim import DDIMSampler
-from models.U-NET.util import load_model, load_img, save_images, set_seed
+from models.stable-diffusion.sampler.ddim import DDIMSampler
+from models.stable-diffusion.util import load_model, load_img, save_images, set_seed
 
 
 class Img2Img:
