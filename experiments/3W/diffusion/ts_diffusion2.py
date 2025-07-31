@@ -1252,7 +1252,7 @@ if __name__ == '__main__':
         num_steps=1000)
     ts_diffusion=ts_diffusion.to(torch.device('cuda'))
     # 1) Extrai métricas nos **2 últimos** datasets
-    metrics = ts_diffusion.evaluate_datasets(
+    '''metrics = ts_diffusion.evaluate_datasets(
         test_datasets=2,
         window_size=15,
         batch_size=256,
@@ -1261,6 +1261,6 @@ if __name__ == '__main__':
     )
 
     # 2) Plota
-    ts_diffusion.plot_metrics_matplotlib(metrics)
-    #print(ts_diffusion.test_sampler(prefix_len=15,future_len=5, window_size=15))
+    ts_diffusion.plot_metrics_matplotlib(metrics)'''
+    print(ts_diffusion.test_sampler(prefix_len=15,future_len=5, window_size=15))
             
