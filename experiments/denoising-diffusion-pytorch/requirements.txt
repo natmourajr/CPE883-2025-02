@@ -1,0 +1,10 @@
+torch>=2.0.0
+torchvision
+tqdm
+pillow
+numpy
+scipy
+einops
+ema-pytorch
+accelerate
+pytorch-fid
