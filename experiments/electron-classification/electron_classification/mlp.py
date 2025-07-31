@@ -21,6 +21,7 @@ class MLP(L.LightningModule):
             nn.Linear(20, 1)
         )
         self.loss_func = nn.BCEWithLogitsLoss()
+        self.example_input_array = torch.Tensor(input_dim)
 
     def forward(self, x):
         return self.model(x)

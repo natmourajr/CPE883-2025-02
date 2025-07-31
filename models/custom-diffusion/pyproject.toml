@@ -1,0 +1,21 @@
+[project]
+name = "custom_diffusion"
+version = "0.1.0"
+description = "Modelo de difusão personalizado para geração de imagens"
+readme = "README.md"
+dependencies = [
+    "diffusers[torch]>=0.34.0",
+    "lightning>=2.5.2",
+    "torch>=2.7.1",
+    "transformers>=4.54.1",
+]
+
+[project.optional-dependencies]
+dev = [
+]
+
+[dependency-groups]
+dev = [
+    "jupyterlab>=4.4.5",
+    "pytest>=8.4.1",
+]
