@@ -94,3 +94,9 @@ Avaliar generalização com separação treino/validação/teste.
 
 ### 👩‍🔬 Autora
 Projeto desenvolvido por Vivian de Carvalho Rodrigues, no contexto da disciplina Tópicos Especiais em Machine Learning (CPE883 - 2025/2), utilizando ferramentas de aprendizado profundo aplicadas a imagens de microtomografia.
+
+### Referências
+- KAN: Kolmogorov-Arnold Networks https://arxiv.org/abs/2404.19756
+- A. D. Bodner, A. S. Tepsich, J. N. Spolski, and S. Pourteau, “Convolutional Kolmogorov-Arnold Networks,” Mar. 2025.arXiv:2406.13155 [cs].
+- Github: https://github.com/AntonioTepsich/Convolutional-KANs/blob/master/kan_convolutional/KANConv.py
+
