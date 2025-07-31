@@ -1,0 +1,17 @@
+[project]
+name = "nano_gpt"
+version = "0.1.0"
+description = "Code for creating NLP transformers."
+readme = "README.md"
+dependencies = [
+
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+]
+
+[tool.setuptools]
+# Explicitly list the Python modules you want to include
+py-modules = ["models", "configurator"]
