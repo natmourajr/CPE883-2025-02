@@ -40,7 +40,7 @@ def list_by_pattern(files: Iterable[Path], pattern: str) -> Generator[Path, None
     """
     for file in files:
         if file.is_dir():
-            yield from list_by_pattern(file.iterdir(), pattern)
+            yield from file.glob(pattern)
         else:
             if file.match(pattern):
                 yield file
