@@ -8,6 +8,9 @@ import sys
 import os
 import numpy as np
 import math
+# --- cole na classe TSDiffusion -------------------------------------------
+import matplotlib.pyplot as plt
+import seaborn as sns  # se não usar, troque por plt.imshow
 
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 if os.environ.get('path3WLoader'): sys.path.append(os.environ.get('path3WLoader'))
@@ -354,63 +357,61 @@ class TSDiffusion(nn.Module):
 
     @torch.no_grad()
     def impute(
-        self,
-        x_obs: torch.Tensor,
-        mask: torch.Tensor,
-        timestamps: torch.Tensor = None,
-        static_feats: torch.Tensor = None,
-        sampling_steps: int = None,
-        device: torch.device = None
-    ) -> torch.Tensor:
+        self, x_obs, mask, timestamps=None, static_feats=None,
+        sampling_steps=None, device=None
+    ):
         device = device or x_obs.device
-        steps = min(sampling_steps or self.num_steps, self.num_steps)
+        steps  = min(sampling_steps or self.num_steps, self.num_steps)
 
-        # 1) Ajusta máscara para latente
-        if hasattr(self, 'encoder'):
-            if self.latent_dim == self.in_channels:
-                mask_latent = mask  # (B,T,C)
+        if hasattr(self, "encoder") and self.latent_dim != self.in_channels:
+            # 1) máscara tempo-a-tempo (B,T,1)
+            mask_time = mask.any(dim=-1, keepdim=True).float()
+
+            # 2) tenta repetir por canal se for múltiplo exato
+            if self.latent_dim % self.in_channels == 0:
+                r = self.latent_dim // self.in_channels
+                mask_latent = mask.repeat_interleave(r, dim=2).float()
             else:
-                mask_latent = (
-                    mask.any(dim=-1, keepdim=True)
-                        .float()
-                        .expand(-1, -1, self.latent_dim)
-                )
+                # fallback: simplesmente expande em todos os dims latentes
+                mask_latent = mask_time.expand(-1, -1, self.latent_dim)
         else:
-            mask_latent = mask
+            mask_latent = mask.float()
 
-        # 2) Codifica observados + adiciona ruído inicial
-        z_obs = self.encoder(x_obs) if hasattr(self, 'encoder') else x_obs
-        noise = torch.randn_like(z_obs)
-        z = z_obs * mask_latent + noise * (1 - mask_latent)
-
-        # 3) Reverse‑diffusion condicionado
-        B = z.size(0)
+        # ----- estado inicial -----
+        z_obs = self.encoder(x_obs) if hasattr(self, "encoder") else x_obs
+        #z     = z_obs * mask_latent + torch.randn_like(z_obs) * (1 - mask_latent)
+        
+        x = x_obs * mask + self.decoder(torch.randn_like(z_obs)) * (1 - mask)
+        z = self.encoder(x)
         for i in reversed(range(steps)):
-            t = torch.full((B,), i, device=device, dtype=torch.long)
+            t   = torch.full((z.size(0),), i, device=device, dtype=torch.long)
             eps = self.forward(
                 z, t,
-                timestamps=timestamps,
-                static_feats=static_feats,
-                already_latent=True,
-                return_state=False,
-                mask=mask  # propaga máscara na atenção
+                timestamps=timestamps, static_feats=static_feats,
+                already_latent=True, mask=mask_time
             )
-            a, ab = self.alpha[i], self.alpha_bar[i]
-            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab)) * eps)
-            if i > 0:
-                z = z + torch.sqrt(self.beta[i]) * torch.randn_like(z)
-
-            # 3.1 Reinsere as observações originais
-            z = z * (1 - mask_latent) + z_obs * mask_latent
-
-            # 4) Decodifica para o espaço original
-            if hasattr(self, "decoder"):
-                # ‑‑‑‑ nova linha: estabiliza amplitude do vetor latente
-                z = torch.nn.functional.layer_norm(
-                    z, normalized_shape=(self.latent_dim,)
-                )
-                z = self.decoder(z)
-            return z   
+            gamma = 0.1                                   # 0<γ≤1
+            x = x - gamma * self.decoder(eps)
+            x = x * (1 - mask) + mask * x_obs
+            z = self.encoder(x)
+            #z = z-eps
+            #a, ab = self.alpha[i], self.alpha_bar[i]
+            #z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab)) * torch.randn_like(z))
+            #if i > 0:
+                #z = z + torch.sqrt(self.beta[i]) * torch.randn_like(z)
+            #z = F.layer_norm(z, (self.latent_dim,)) 
+            # reinsere valores observados
+            
+            #z = z * (1 - mask_latent) + z_obs * mask_latent
+            # reinserção “suave”
+            #alpha = 1.0 - mask_latent
+            #z = alpha * z + (1 - alpha) * z_obs
+        # ----- decodifica UMA única vez depois do loop -----
+        #if hasattr(self, "decoder"):
+            # estabiliza magnitude ANTES da projeção
+            #z = F.layer_norm(z, (self.latent_dim,))      # <-- ADICIONE 
+            #z = self.decoder(z)
+        return x
     # ------------------------------------------------------------------
     def _inverse_scale(self, z: torch.Tensor, feature_cols: list) -> np.ndarray:
         """
@@ -922,8 +923,8 @@ class TSDiffusion(nn.Module):
         df_win, _ = self._pick_window(df_all, feature_cols, prefix_len)
 
         # -------- 3. eixo temporal robusto (segundos) ------------------------
-        t_ns  = df_win.index.astype("int64").to_numpy()      # ns
-        t_sec = (t_ns - t_ns[0]) / 1e9                       # float64
+        t_ns  = df_all.index.astype("int64").to_numpy()      # ns
+        t_sec = (t_ns - t_ns.min()) / 1e9                       # float64
         t_sec = t_sec.astype(np.float32)                     # ← só aqui vira f32
 
         # delta_t real (última diferença não‑nula)
@@ -931,7 +932,7 @@ class TSDiffusion(nn.Module):
         delta_real = float(diffs[diffs > 0].min()) if (diffs > 0).any() else 1.0
 
         # normaliza 0‑1 como no treino
-        t_norm = t_sec / t_sec[-1] if t_sec[-1] > 0 else t_sec
+        t_norm = t_sec / t_sec.max()
 
         # -------- 4. dados e máscara ----------------------------------------
         x_np = df_win[feature_cols].to_numpy(dtype=np.float32)
@@ -970,67 +971,266 @@ class TSDiffusion(nn.Module):
             )
         return out
 
+    @torch.no_grad()
+    def evaluate_datasets(
+            self,
+            test_datasets: int = 2,
+            window_size:   int = 600,
+            batch_size:    int = 256,
+            missing_frac:  float = 0.2,
+            sampling_steps:int = 40,
+            device:        torch.device = None,
+            seed:          int = 42,
+    ):
+        """
+        Avalia os *N* últimos datasets do Loader3W.
+        Retorna: metrics[dataset_id][feature] = {"mse":…, "mae":…, "rmse":…}
+        """
+        device = device or next(self.parameters()).device
+        self.eval()
+
+        loader = Loader3W(); loader.load_stats("stats.pkl")
+        all_ds = pd.DataFrame()
+        for i,ds in enumerate(loader.preprocess()):
+            if i >= len(loader.stats['ids'])-2:
+                all_ds = pd.concat([all_ds,ds],ignore_index=True)
+        base = list(self.default_features)
+        state = sorted([c for c in all_ds.columns if c.startswith("state-")])
+        feature_cols = (base + state)[: self.in_channels]
+        if len(feature_cols) != self.in_channels:
+            raise ValueError("in_channels incompatível.")
+
+        static_cols = [c for c in all_ds.columns if c.endswith("_relative_max")]
+        all_ids = list(loader.stats['ids'])
+        # pega só os *N* últimos
+        eval_pairs = list(zip(all_ids[-test_datasets:], all_ds))
+
+        rng = np.random.default_rng(seed)
+        df = all_ds
+        # ---------- dataset completo em tensores ----------
+        t_dataset = self._make_dataset(
+            df, timestamp_col='index',
+            window_size=window_size,
+            feature_cols=feature_cols,
+            static_features_cols=static_cols
+        )
+        loader_ds = DataLoader(t_dataset, batch_size=batch_size)
+        feat_names = feature_cols
+
+        # acumuladores por feature
+        mse_noise = np.zeros(len(feat_names))
+        rmse_imp  = np.zeros(len(feat_names))
+        mae_imp   = np.zeros(len(feat_names))
+        n_points  = np.zeros(len(feat_names))
+
+        for batch in loader_ds:
+            # ------------------- unpack -------------------
+            if len(batch) == 4:
+                x, ts_batch, m, s = batch
+            else:
+                x, ts_batch, m = batch; s = None
+            x, ts_batch, m = [t.to(device) for t in (x, ts_batch, m)]
+            s = s.to(device) if s is not None else None
+
+            # ------------------- Difusão (ruído) ----------
+            t_rand = torch.randint(0, self.num_steps, (x.size(0),),
+                                device=device)
+            noise  = torch.randn_like(x)
+            ab     = self.alpha_bar[t_rand].view(-1, 1, 1)
+            x_t    = torch.sqrt(ab)*x + torch.sqrt(1-ab)*noise
+            eps    = self.forward(x_t, t_rand,
+                                timestamps=ts_batch,
+                                static_feats=s, mask=m)
+            mse_noise += F.mse_loss(eps, noise,
+                                    reduction='none').sum((0,1)).cpu().numpy()
+
+            # ------------------- Imputação ----------------
+            #   gera máscara faltante sintética p/ avaliar imputação
+            miss_mask = m.clone()
+            # sorteia valores a serem “apagados”
+            mask_flat = miss_mask.reshape(-1, miss_mask.size(-1)).cpu().numpy()
+            idx_del   = rng.choice(mask_flat.shape[0],
+                                int(mask_flat.shape[0]*missing_frac),
+                                replace=False)
+            mask_flat[idx_del] = 0
+            miss_mask = torch.tensor(mask_flat.reshape(miss_mask.shape),
+                                    device=device,
+                                    dtype=m.dtype)
+
+            x_imp = self.impute(
+                x_obs=x, mask=miss_mask,
+                timestamps=ts_batch,
+                static_feats=s,
+                sampling_steps=sampling_steps,
+                device=device
+            )
+
+            diff = (x_imp - x).abs() * (1 - miss_mask)  # só onde NaN
+            mae_imp += diff.sum((0,1)).cpu().numpy()
+            rmse_imp += (diff**2).sum((0,1)).cpu().numpy()
+            n_points += (1 - miss_mask).sum((0,1)).cpu().numpy()
+
+        # normaliza
+        mae_imp  /= n_points.clip(min=1)
+        rmse_imp = np.sqrt(rmse_imp / n_points.clip(min=1))
+        mse_noise /= len(t_dataset) * t_dataset.tensors[0].shape[1]
+
+        # salva
+        metrics_out = {
+            feat: {"mse": float(mse_noise[i]),
+                "mae": float(mae_imp[i]),
+                "rmse": float(rmse_imp[i])}
+            for i, feat in enumerate(feat_names)
+            }
+
+        return metrics_out
+
+    @staticmethod
+    def plot_metrics_matplotlib(metrics_dict):
+        """
+        Gera 3 gráficos para um único dataset:
+        1. Barras de RMSE por feature
+        2. Barras de MAE por feature
+        3. Linha de MSE por feature
+        """
+        import matplotlib.pyplot as plt
+        import pandas as pd
+        import seaborn as sns
+
+        # Organiza os dados em DataFrame
+        records = []
+        for feature, vals in metrics_dict.items():
+            records.append({
+                "feature": feature,
+                "mse":   vals["mse"],
+                "mae":   vals["mae"],
+                "rmse":  vals["rmse"]
+            })
+        df = pd.DataFrame(records)
+
+        # 1) Barras de RMSE
+        plt.figure(figsize=(12, 4))
+        sns.barplot(data=df, x="feature", y="rmse")
+        plt.xticks(rotation=45)
+        plt.ylabel("RMSE")
+        plt.title("RMSE por Feature")
+        plt.tight_layout()
+        plt.show()
+
+        # 2) Barras de MAE
+        plt.figure(figsize=(12, 4))
+        sns.barplot(data=df, x="feature", y="mae")
+        plt.xticks(rotation=45)
+        plt.ylabel("MAE")
+        plt.title("MAE por Feature")
+        plt.tight_layout()
+        plt.show()
+
+        # 3) Linha de MSE
+        plt.figure(figsize=(12, 4))
+        plt.plot(df["feature"], df["mse"], marker="o")
+        plt.xticks(rotation=45)
+        plt.ylabel("MSE")
+        plt.title("MSE por Feature")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
     # ---------------------------------------------------------------------
     # 3)  TESTE DA IMPUTAÇÃO  --------------------------------------------
     # ---------------------------------------------------------------------
+# ------------------------------------------------------------------
+# TESTE DA IMPUTAÇÃO — versão em batches GPU-friendly  --------------
+# ------------------------------------------------------------------
     @torch.no_grad()
     def test_impute(
         self,
-        dataset_idx: int              = 0,
-        feature_cols: list            = None,
-        static_features_cols: list    = None,
-        missing_frac: float           = 0.2,
-        random_state: int             = 42,
+        dataset_idx: int   = 0,
+        missing_frac: float = 0.2,
+        random_state: int  = 42,
+        chunk_len:    int  = 4_096,
+        sampling_steps: int = 40,
+        range_: tuple = ()
     ):
-        """
-        Retorna dicionário {feature: (times, orig, miss, imp)}
-        """
         loader = Loader3W(); loader.load_stats("stats.pkl")
-        df = loader.preprocess()[dataset_idx].sort_index()
+        df = loader.preprocess().send(None).sort_index()
+        if range_:
+            df = df[df.index >= range_[0]]
+            df = df[df.index <= range_[1]]
+        # -------- colunas coerentes --------
+        base = list(self.default_features)
+        state = sorted([c for c in df.columns if c.startswith("state-")])
+        feature_cols = (base + state)[: self.in_channels]
+        if len(feature_cols) != self.in_channels:
+            raise ValueError("in_channels incompatível.")
 
-        feature_cols = feature_cols or self.default_features
-        static_features_cols = static_features_cols or \
-                            [f"{f}_relative_max" for f in self.default_features]
+        static_cols = [c for c in df.columns if c.endswith("_relative_max")]
 
-        # ---------- série & timestamps ----------
-        times_ts = pd.to_datetime(df.index)
-        times = (
-            (times_ts.astype("int64") / 1e9) - (times_ts[0].value / 1e9)
-        )
-        data_np = df[feature_cols].values.astype(np.float32)
-        mask_np = (~np.isnan(data_np)).astype(np.float32)
-        data_np[np.isnan(data_np)] = 0.0
+        # -------- eixo temporal absoluto (segundos) --------
+        t_sec = (pd.to_datetime(df.index).astype("int64") / 1e9)\
+                .to_numpy(dtype=np.float32)               # shape (T,)
+        T, C = len(t_sec), self.in_channels
 
-        # ---------- injeta faltantes ----------
+        # -------- dados + máscara --------
+        data_np = df[feature_cols].to_numpy(dtype=np.float32)
         rng = np.random.default_rng(random_state)
+
         miss_np = data_np.copy()
-        T, C = miss_np.shape
-        idx_flat = rng.choice(T * C, int(T * C * missing_frac), replace=False)
+        idx_flat = rng.choice(miss_np.size,
+                            int(miss_np.size * missing_frac),
+                            replace=False)
         miss_np.reshape(-1)[idx_flat] = np.nan
         mask_miss = (~np.isnan(miss_np)).astype(np.float32)
-        miss_np[np.isnan(miss_np)] = 0.0
 
-        # ---------- tensores ----------
-        x_obs  = torch.tensor(miss_np[None], dtype=torch.float32, device=self.beta.device)
-        mask_t = torch.tensor(mask_miss[None], dtype=torch.float32, device=self.beta.device)
-        ts_t   = torch.tensor(times[None], dtype=torch.float32, device=self.beta.device)
-        stat   = torch.tensor(
-            df.iloc[0][static_features_cols].values,
-            dtype=torch.float32, device=self.beta.device
-        ).unsqueeze(0)
+        # -------- static feats --------
+        if self.static_dim > 0 and static_cols:
+            stat_vals = pd.to_numeric(df.iloc[0][static_cols], errors="coerce")\
+                        .fillna(0.0).astype(np.float32).values
+            stat_vals = np.pad(stat_vals,
+                            (0, max(0, self.static_dim - len(stat_vals))),
+                            constant_values=0.0)[: self.static_dim]
+            stat = torch.tensor(stat_vals, device=self.beta.device)\
+                    .unsqueeze(0)     # (1,D)
+        else:
+            stat = None
 
-        # ---------- imputação ----------
-        imputed = self.impute(x_obs, mask_t, timestamps=ts_t, static_feats=stat)
-        imp_np = imputed[0].cpu().numpy()
+        # -------- acumulador de saída --------
+        imp_full = np.empty_like(miss_np)
 
-        # ---------- organiza saída ----------
-        out = {}
-        for j, feat in enumerate(feature_cols):
-            orig_col = df[feat].values
-            miss_col = miss_np[:, j]
-            imp_col  = imp_np[:, j]
-            out[feat] = (times.values, orig_col, miss_col, imp_col)
+        # -------- processamento em chunks --------
+        for start in range(0, T, chunk_len):
+            end = min(start + chunk_len, T)
+            slc = slice(start, end)
+
+            # --- normaliza tempo local 0-1 ----
+            t_chunk = t_sec[slc]
+            span = t_chunk[-1] - t_chunk[0]
+            span = span if span > 0 else 1.0
+            t_norm = (t_chunk - t_chunk[0]) / span          # (L_chunk,)
+
+            # --- tensores na GPU ----
+            x_obs  = torch.tensor(
+                        np.nan_to_num(miss_np[slc], nan=0.0)[None],
+                        dtype=torch.float32, device=self.beta.device)
+            m_t    = torch.tensor(mask_miss[slc][None],
+                                dtype=torch.float32, device=self.beta.device)
+            ts_t   = torch.tensor(t_norm[None],
+                                dtype=torch.float32, device=self.beta.device)
+
+            # --- imputação ----
+            imp_chunk = self.impute(x_obs, m_t,
+                                    timestamps=ts_t,
+                                    static_feats=stat, sampling_steps=sampling_steps)[0]   # (L,C)
+            imp_full[slc] = imp_chunk.cpu().numpy()
+
+        # -------- organiza saída --------
+        out = {feat: (t_sec,                 # eixo absoluto em segundos
+                    df[feat].values,       # original
+                    miss_np[:, j],         # com NaNs
+                    imp_full[:, j])        # imputado (z-score)
+            for j, feat in enumerate(feature_cols)}
         return out
+
 
 
 if __name__ == '__main__':
@@ -1051,5 +1251,16 @@ if __name__ == '__main__':
         hidden_dim=1024,
         num_steps=1000)
     ts_diffusion=ts_diffusion.to(torch.device('cuda'))
-    print(ts_diffusion.test_sampler(prefix_len=15,future_len=5, window_size=15))
+    # 1) Extrai métricas nos **2 últimos** datasets
+    metrics = ts_diffusion.evaluate_datasets(
+        test_datasets=2,
+        window_size=15,
+        batch_size=256,
+        missing_frac=0.3,     # igual ao seu test_impute
+        sampling_steps=50
+    )
+
+    # 2) Plota
+    ts_diffusion.plot_metrics_matplotlib(metrics)
+    #print(ts_diffusion.test_sampler(prefix_len=15,future_len=5, window_size=15))
             
