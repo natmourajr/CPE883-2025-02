@@ -641,7 +641,7 @@ class TSDiffusion(nn.Module):
         verbose: bool = True
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        lam = [0.001, 0.4, 0.05, 0.05]
+        lam = [0.001, 0.4, 0.05, 0.05] #Diferente do artigo para convergir mais rápido.
         train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols)
         val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
