@@ -36,6 +36,21 @@ denoising-diffusion-pytorch/       # pasta raíz do projeto (clone do repo)
 
 ```
 
+### Pontos chave deste experimento
+Download do MNIST	Exporta as 1000 primeiras imagens para uma pasta (./mnist_images)	✅
+2. Modelo simples	Um Unet pequeno (dim=32, dim_mults=(1,2,4)) e imagens 32x32 em tons de cinza	✅
+3. Diffusion simplificado	1000 timesteps, 100 de amostragem, objective='pred_v' (variação estável)	✅
+4. Treinamento curto	1000 passos, batch de 32, salva a cada 100 steps	✅
+5. FID desativado	Não tenta calcular métrica FID, ideal para CPU	✅
+7. Estrutura clara e modular	Separou funções para organização	✅
+
+### Resultados
+
+Resultados apenas para validar que o modelo está aprendendo. Foi utilizado sub-amostram de imagens MNINST. E poucas iterações de treino.
+
+<img width="172" height="172" alt="sample-4" src="https://github.com/user-attachments/assets/00e98ffe-695c-481e-9091-b6ff8e314b0e" />
+
+
 ### Próximos passos:
 
 Com esse baseline funcionando, o projeto será migrado para segmentação de imagens de microtomografia de rochas, evoluindo a arquitetura e adaptando o pipeline.
@@ -79,6 +94,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu120
 ```
 
 Depois, reinstale as outras dependências conforme requirements.txt.
+
+
 
 ### Referências
 - Denoising Diffusion Probabilistic Models:  https://arxiv.org/abs/2006.11239
