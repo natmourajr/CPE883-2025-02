@@ -46,7 +46,7 @@ denoising-diffusion-pytorch/       # pasta raíz do projeto (clone do repo)
 
 ### Resultados
 
-Resultados apenas para validar que o modelo está aprendendo. Foi utilizado sub-amostram de imagens MNINST. E poucas iterações de treino.
+Resultados apenas para validar que o modelo está aprendendo. Foi utilizado sub-amostram de imagens MNIST. E poucas iterações de treino (train_mnist_export.py).
 
 <img width="172" height="172" alt="sample-4" src="https://github.com/user-attachments/assets/00e98ffe-695c-481e-9091-b6ff8e314b0e" />
 
