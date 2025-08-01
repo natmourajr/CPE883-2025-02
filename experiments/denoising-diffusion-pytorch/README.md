@@ -37,12 +37,12 @@ denoising-diffusion-pytorch/       # pasta raíz do projeto (clone do repo)
 ```
 
 ### Pontos chave deste experimento
-Download do MNIST	Exporta as 1000 primeiras imagens para uma pasta (./mnist_images)	✅
-2. Modelo simples	Um Unet pequeno (dim=32, dim_mults=(1,2,4)) e imagens 32x32 em tons de cinza	✅
-3. Diffusion simplificado	1000 timesteps, 100 de amostragem, objective='pred_v' (variação estável)	✅
-4. Treinamento curto	1000 passos, batch de 32, salva a cada 100 steps	✅
-5. FID desativado	Não tenta calcular métrica FID, ideal para CPU	✅
-7. Estrutura clara e modular	Separou funções para organização	✅
+- 1. Download do MNIST	Exporta as 1000 primeiras imagens para uma pasta (./mnist_images)	✅
+- 2. Modelo simples	Um Unet pequeno (dim=32, dim_mults=(1,2,4)) e imagens 32x32 em tons de cinza	✅
+- 3. Diffusion simplificado	1000 timesteps, 100 de amostragem, objective='pred_v' (variação estável)	✅
+- 4. Treinamento curto	1000 passos, batch de 32, salva a cada 100 steps	✅
+- 5. FID desativado	Não tenta calcular métrica FID, ideal para CPU	✅
+- 7. Estrutura clara e modular	Separou funções para organização	✅
 
 ### Resultados
 
