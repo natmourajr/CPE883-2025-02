@@ -22,7 +22,7 @@ RUN git clone https://github.com/petrobras/3W.git
 
 COPY requirements.txt /requirements.txt
 COPY loader /loader
-COPY diffusion /diffusion
+
 COPY stats.pkl stats.pkl
 
 ARG http_proxy
@@ -33,7 +33,7 @@ ENV https_proxy=${https_proxy}
 
 RUN /venv/bin/python3 -m pip install --upgrade pip
 RUN /venv/bin/python3 -m pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
-
+COPY diffusion /diffusion
 CMD /venv/bin/python3 -m diffusion.train
 
 
