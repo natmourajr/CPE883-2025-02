@@ -91,9 +91,23 @@ class JumpODEEncoder(nn.Module):
     def __init__(self, in_dim, hidden_dim, attn_heads=4):
         super().__init__()
         self.hidden_dim = hidden_dim
+        ff_dim = self.hidden_dim * 2
         self.gru = nn.GRUCell(in_dim, hidden_dim)
         self.odefunc = ODEFunc(hidden_dim)
-        self.attn = nn.MultiheadAttention(hidden_dim, attn_heads, batch_first=True)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.norm3 = nn.LayerNorm(hidden_dim)
+        self.norm4 = nn.LayerNorm(hidden_dim)
+        self.attn1 = nn.MultiheadAttention(hidden_dim, attn_heads, batch_first=True, dropout=0.1,)
+        self.attn2 = nn.MultiheadAttention(hidden_dim, attn_heads, batch_first=True, dropout=0.1,)
+        self.ff1 = nn.Sequential(
+            nn.Linear(self.hidden_dim, ff_dim), nn.GELU(), nn.Dropout(0.1),
+            nn.Linear(ff_dim, self.hidden_dim)            
+        )
+        self.ff2 = nn.Sequential(
+            nn.Linear(self.hidden_dim, ff_dim), nn.GELU(), nn.Dropout(0.1),
+            nn.Linear(ff_dim, self.hidden_dim)           
+        )
         
     def forward(self, x, ts, mask=None):
         """
@@ -120,9 +134,15 @@ class JumpODEEncoder(nn.Module):
             m_time = mask.to(torch.bool).any(dim=2)            # (B,T)
             key_pad = ~m_time                                  # True = IGNORAR
 
-            H, _ = self.attn(H, H, H, key_padding_mask=key_pad)  # <- 2‑D 👍
+            attn_out, _ = self.attn1(H, H, H, key_padding_mask=key_pad)  # <- 2‑D 👍
         else:
-            H, _ = self.attn(H, H, H)
+            attn_out, _ = self.attn1(H, H, H)
+        
+        H = self.norm1(H+attn_out)
+        H = self.norm2(self.ff1(H)+H)
+        attn_out, _ = self.attn2(H, H , H)
+        H = self.norm3(H+attn_out) 
+        H = self.norm4(self.ff2(H)+H)
         return H
 
 class DiffTimeEmbedding(nn.Module):
@@ -252,16 +272,18 @@ class TSDiffusion(nn.Module):
         if hasattr(self, 'encoder') and not already_latent:
             x = self.encoder(x)
         h = self.input_proj(x)
-        # Positional encoding via Time2Vec
-        if timestamps is None:
-            raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
-        h = self.encoder_ode(h, timestamps, mask=mask)   # (B,T,model_dim)
-        te = self.t_embed(t).unsqueeze(1)          # (b,1,model_dim)
-        h = h + te
         # Static features
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
             h = h + se
+        # Positional encoding via Time2Vec
+        if timestamps is None:
+            raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
+        te = self.t_embed(t).unsqueeze(1)          # (b,1,model_dim)
+        h = h + te
+        h = F.layer_norm(h,(self.model_dim,))
+        h = self.encoder_ode(h, timestamps, mask=mask)   # (B,T,model_dim)
+
         # Transformer
         #h = h.permute(1, 0, 2)  # (seq_len, b, model_dim)
         #h = self.transformer(h)
@@ -641,7 +663,7 @@ class TSDiffusion(nn.Module):
         verbose: bool = True
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        lam = [0.001, 0.4, 0.05, 0.05]
+        lam = [0.4, 0.4, 0.1, 0.1] #Diferente do artigo para convergir mais rápido.
         train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols)
         val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
@@ -706,8 +728,10 @@ class TSDiffusion(nn.Module):
                 ce = m_t * torch.log(mb_pred + 1e-8) + \
                     (1 - m_t) * torch.log(1 - mb_pred + 1e-8)
                 L4 = -ce.mean()
-
-                loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4
+                if L2.item()>0.3:
+                    loss = L2
+                else:
+                    loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4
                 #loss = lam[1]*L2 + lam[3]*L4
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
                 total_train += loss.item() * x.size(0)
@@ -1244,7 +1268,7 @@ if __name__ == '__main__':
         hidden_dim=1024,
         num_steps=1000
         )   
-    ts_diffusion = ts_diffusion.load('ts_diffusion_3w_ep20.pt',in_channels=17,
+    ts_diffusion = ts_diffusion.load('state_ep5.pt',in_channels=17,
         latent_dim=256,
         model_dim=256,
         static_dim=7,

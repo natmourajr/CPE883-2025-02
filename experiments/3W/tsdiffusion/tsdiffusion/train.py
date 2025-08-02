@@ -18,7 +18,18 @@ if __name__ == '__main__':
         hidden_dim=1024,
         num_steps=1000
         )
-    
+    try:
+        ts_diffusion = ts_diffusion.load(
+            'state.pt',
+            in_channels=17,
+            latent_dim=256,
+            model_dim=256,
+            static_dim=7,
+            hidden_dim=1024,
+            num_steps=1000            
+        )
+    except:
+        print('Sem arquivo de estados do Torch. Será criado um novo arquivo.')
     ts_diffusion = ts_diffusion.to(device=torch.device('cuda' if torch.cuda.is_available else 'cpu'))
     ts_diffusion.train3W(
         window_size=15,
