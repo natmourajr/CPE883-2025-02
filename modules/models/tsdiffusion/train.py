@@ -10,11 +10,12 @@ if __name__ == '__main__':
     ld = Loader3W()
     ld.get_ids_from_wells_with_event_type([8])
     ld.extract_stats(['ABER-CKP', 'P-ANULAR', 'P-PDG','P-TPT','T-MON-CKP','T-PDG','T-TPT'])
+    ld.save_stats('stats.pkl')
 
     ts_diffusion = TSDiffusion(
         in_channels=17,
-        latent_dim=256,
-        model_dim=256,
+        latent_dim=170,
+        model_dim=340,
         static_dim=7,
         hidden_dim=1024,
         num_steps=1000
@@ -24,7 +25,7 @@ if __name__ == '__main__':
             'state.pt',
             in_channels=17,
             latent_dim=170,
-            model_dim=256,
+            model_dim=340,
             static_dim=7,
             hidden_dim=1024,
             num_steps=1000            
