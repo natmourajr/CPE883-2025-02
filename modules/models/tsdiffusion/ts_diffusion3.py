@@ -476,7 +476,7 @@ class TSDiffusion(nn.Module):
         lower_loss = float('inf')
         test_patience = patience
         loader = Loader3W()
-        loader.load_stats('stats.pkl')
+        loader.load_stats('./stats.pkl')
         for i in range(1, epochs+1):
             test = pd.DataFrame()
             datasets = loader.preprocess()
@@ -533,7 +533,7 @@ class TSDiffusion(nn.Module):
             else:
                 test_patience -= 1
                 if test_patience <= 0:
-                    print(f'Early stopping at epoch {i}/{epochs} - Test Loss: {test_loss:.6f}')
+                    print(f'Early stopping at epoch {i}/{epochs} - Test Loss: {test_loss[0]:.6f}')
                     print(f'Test L1: {test_loss[1]:.6f}, Test L2: {test_loss[2]:.6f}, Test L3: {test_loss[3]:.6f}, Test L4: {test_loss[4]:.6f}')
                     break
             print(f'Epoch {i}/{epochs} completed - Test Loss: {test_loss[0]:.6f}')

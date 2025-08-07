@@ -5,10 +5,11 @@ if __name__ == '__main__':
     sys.path.append('/')
 
     from loader import Loader3W
-    from .ts_diffusion2 import TSDiffusion
+    from .ts_diffusion3 import TSDiffusion
 
     ld = Loader3W()
-    ld.load_stats()
+    ld.get_ids_from_wells_with_event_type([8])
+    ld.extract_stats(['ABER-CKP', 'P-ANULAR', 'P-PDG','P-TPT','T-MON-CKP','T-PDG','T-TPT'])
 
     ts_diffusion = TSDiffusion(
         in_channels=17,
@@ -22,7 +23,7 @@ if __name__ == '__main__':
         ts_diffusion = ts_diffusion.load(
             'state.pt',
             in_channels=17,
-            latent_dim=256,
+            latent_dim=170,
             model_dim=256,
             static_dim=7,
             hidden_dim=1024,
@@ -36,4 +37,4 @@ if __name__ == '__main__':
         batch_size=2000,
         epochs=10,
     )
-    ts_diffusion.save('state.pt')
+    
