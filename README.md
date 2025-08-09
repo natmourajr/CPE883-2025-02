@@ -175,8 +175,8 @@ Além de fornecer uma base teórica sólida sobre os princípios matemáticos e 
 
 No diretório Experiments, deve ser armazenaodo o experimento com cada modelo. Portanto, na pasta "experiments/tabular/", devem ser adicionados os experimentos com modelos que processem dados tabulares.
 
-A pasta "modules_processing/" contém definições de classes que criam tudo o que é usado para criar um experimento, ou seja, contém todas as classes utilitárias. Algumas delas são:
-      modules_processing/feature\_mappers.py: Define as classes que extraem os atributos de um determinado experimento. A implementação utiliza o Torch para tornar a extração mais rápida ao utilizar muitos dados. Na versão atual, algumas estratégias já foram implementadas, por exemplo:
+A pasta "modules_processing/" contém definições de classes que criam tudo o que é usado para criar um experimento, ou seja, contém todas as classes utilitárias. Por exemplo:
+      modules_processing/feature\_mappers.py: Define as classes que extraem os atributos de um determinado experimento. 
 
 
 ### Trabalho Final
