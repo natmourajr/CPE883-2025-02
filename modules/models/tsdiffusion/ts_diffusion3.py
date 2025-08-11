@@ -14,7 +14,7 @@ import seaborn as sns  # se não usar, troque por plt.imshow
 
 t0 = 1735689600.0    
 max_drop = 0.9
-TS_SPAN = 60 * 60 * 24 * 365 # 4 semanas
+TS_SPAN = 60 * 60 * 24 * 365
 lam = [0.4, 0.4, 0.1, 0.1] #Diferente do artigo para convergir mais rápido.
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 if os.environ.get('path3WLoader'): sys.path.append(os.environ.get('path3WLoader'))
