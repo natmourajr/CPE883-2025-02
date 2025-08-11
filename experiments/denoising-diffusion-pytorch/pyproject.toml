@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "denoising-diffusion-mnist"
+version = "0.1.0"
+description = "Experimento mínimo viável de Diffusion Models usando MNIST"
+authors = ["Vivian de Carvalho Rodrigues"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+torch = "^2.0.0"
+torchvision = "^0.15.1"
+tqdm = "^4.65.0"
+pillow = "^10.0.0"
+numpy = "^1.25.0"
+scipy = "^1.11.0"
+einops = "^0.6.0"
+ema-pytorch = "^0.2.1"
+accelerate = "^0.24.0"
+pytorch-fid = "^0.4.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
