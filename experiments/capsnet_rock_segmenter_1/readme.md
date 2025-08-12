@@ -56,7 +56,7 @@ O modelo é baseado em uma arquitetura **SegCaps simplificada**, composta por:
 1. Clone este repositório:
 
 ```
-   git clone https://github.com/<usuario>/<repositorio>.git
+   git clone https://github.com/CPE883-2025-02/experiments/capsnet_rock_segmenter_1.git
    cd <repositorio>
 ```
    
