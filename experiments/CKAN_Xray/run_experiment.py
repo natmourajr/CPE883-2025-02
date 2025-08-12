@@ -11,7 +11,7 @@ import shutil
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..',)))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-from modules.models.CKAN.ckan import CKAN
+from models.CKAN.ckan import CKAN
 
 def load_config():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
