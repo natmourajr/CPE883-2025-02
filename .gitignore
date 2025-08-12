@@ -209,5 +209,4 @@ cython_debug/
 .cursorindexingignoredata/
 .vscode/
 data/
-cpe883_latest.sif
-results/
+download_data.py

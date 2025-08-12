@@ -2,7 +2,7 @@
 
 from torchvision import transforms
 
-def get_image_transforms(image_size=128, is_train=False):
+def get_image_transforms(image_size=224, is_train=False):
     """
     Cria e retorna um pipeline de transformações de imagem do torchvision.
 
