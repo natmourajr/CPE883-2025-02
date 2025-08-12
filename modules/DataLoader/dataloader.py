@@ -7,12 +7,6 @@ from torch.utils.data import Dataset
 import torch
 
 class TuberculosisDataset(Dataset):
-    """
-    Dataset customizado para o dataset de Raio-X de Tuberculose (Shenzhen).
-    VERSÃO SIMPLIFICADA PARA VALIDAÇÃO CRUZADA.
-    Esta classe agora representa o DATASET COMPLETO. A divisão em treino/validação
-    é feita externamente  no módulo Evaluation.
-    """
     def __init__(self, data_dir, transform=None):
         """
         Args:

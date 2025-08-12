@@ -42,7 +42,7 @@ def main():
     
     # 2. Pega o pipeline de transformações (sem data augmentation)
     # is_train=False para um teste consistente
-    transforms = get_image_transforms(image_size=image_size, is_train=False)
+    transforms = get_image_transforms(image_size=image_size, is_train=True)
     
     # 3. Tenta instanciar o Dataset completo
     try:

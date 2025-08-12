@@ -9,7 +9,7 @@ dataset:
 
 # Seção para os parâmetros da validação cruzada
 cross_validation:
-  n_splits: 10 # O 'K' do K-Fold, ou seus "10 sorteios"
+  n_splits: 10 
 
 training:
   batch_size: 4
