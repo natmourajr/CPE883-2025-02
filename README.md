@@ -136,4 +136,47 @@ Além de fornecer uma base teórica sólida sobre os princípios matemáticos e 
 #### Neural Operators
 1. [DeepONet: Learning nonlinear operators for identifying differential equations based on the universal approximation theorem of operators](https://arxiv.org/abs/1910.03193)
 
+### Estrutura do repositório "main"
+```
+├── environment.yml
+├── dataloaders
+│       │   ├── tabular
+│       │   ├── serial
+│       │   ├── imagem
+
+├── experiments
+│       │   ├── tabular
+                 ├── ...
+                 ├── ...
+│       │   ├── serial
+                 ├── ...
+                 ├── ... 
+│       │   ├── imagem
+                 ├── ... 
+├── models
+│       │   ├── KAN
+                ├── ...
+                ├── ...
+│       │   ├── Diffusion Probabilistic Models
+                ├── ...
+                ├── ...
+│       │   ├── Capsule Networks
+                ├── ...
+                ├── ...
+│       │   ├── Attention Models
+│       │   ├── Neural Operators
+├── modules_processing
+│   ├── ...
+│   └── ...
+├── utils
+│   └── utils.py
+└── setup.py
+```
+
+No diretório Experiments, deve ser armazenaodo o experimento com cada modelo. Portanto, na pasta "experiments/tabular/", devem ser adicionados os experimentos com modelos que processem dados tabulares.
+
+A pasta "modules_processing/" contém definições de classes que criam tudo o que é usado para criar um experimento, ou seja, contém todas as classes utilitárias. Por exemplo:
+      modules_processing/feature\_mappers.py: Define as classes que extraem os atributos de um determinado experimento. 
+
+
 ### Trabalho Final
