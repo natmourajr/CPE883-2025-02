@@ -18,10 +18,17 @@ from torch import nn
 from torch.optim import Adam, lr_scheduler
 from .capsulelayers import DenseCapsule, PrimaryCapsule
 import numpy as np
-from matplotlib import pyplot as plt
 import csv
 import math
 from PIL import Image
+from time import time
+import matplotlib.pyplot as plt
+import os
+from torch.utils.data import Subset, DataLoader
+from sklearn.model_selection import StratifiedKFold
+from tqdm import tqdm
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class CapsuleNet(nn.Module):
@@ -108,7 +115,7 @@ def caps_loss(y_true, y_pred, x, x_recon, lam_recon):
 def show_reconstruction(model, test_loader, n_images, args):
     model.eval()
     for x, _ in test_loader:
-        x = x[: min(n_images, x.size(0))].to(next(model.parameters()).device)
+        x = x[: min(n_images, x.size(0))].to(DEVICE)
         with torch.no_grad():
             _, x_recon = model(x)
         data = np.concatenate([x.cpu().numpy(), x_recon.cpu().numpy()])
@@ -120,25 +127,51 @@ def show_reconstruction(model, test_loader, n_images, args):
         print()
         print("Reconstructed images are saved to %s/real_and_recon.png" % args.save_dir)
         print("-" * 70)
-        # plt.imshow(
-        #     plt.imread(
-        #         args.save_dir + "/real_and_recon.png",
-        #     )
-        # )
-        # plt.show()
         break
+
+
+def plot_sample_predictions(
+    model, data_loader, class_names, save_dir, epoch, fold_n, device="cuda"
+):
+    os.makedirs(save_dir + "/predictions", exist_ok=True)
+    model.eval()
+    images, labels = next(iter(data_loader))
+    images, labels = images.to(DEVICE), labels.to(DEVICE)
+    with torch.no_grad():
+        outputs, _ = model(images)
+        preds = outputs.max(1)[1]
+
+    images = images.cpu().numpy()
+    labels = labels.cpu().numpy()
+    preds = preds.cpu().numpy()
+
+    plt.figure(figsize=(12, 6))
+    for i in range(min(16, len(images))):  # Show up to 16 images
+        plt.subplot(2, 8, i + 1)
+        mean = np.array([0.4914, 0.4822, 0.4465])
+        std = np.array([0.247, 0.243, 0.261])
+        img = images[i].transpose(1, 2, 0)
+        img = img * std + mean  # Unnormalize
+        img = img.clip(0, 1)
+        plt.imshow(img)
+        plt.title(f"T:{class_names[labels[i]]}\nP:{class_names[preds[i]]}", fontsize=8)
+        plt.axis("off")
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(save_dir, "predictions", f"epoch_{epoch}_fold{fold_n}.png")
+    )
+    plt.close()
 
 
 def test(model, test_loader, args):
     model.eval()
     test_loss = 0
     correct = 0
-    device = next(model.parameters()).device
     for x, y in test_loader:
-        y = torch.zeros(y.size(0), 10, device=device).scatter_(
-            1, y.to(device).view(-1, 1), 1.0
+        x, y = x.to(DEVICE), y.to(DEVICE)
+        y = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
+            1, y.to(DEVICE).view(-1, 1), 1.0
         )
-        x, y = x.to(device), y.to(device)
         with torch.no_grad():
             y_pred, x_recon = model(x)
         test_loss += caps_loss(y, y_pred, x, x_recon, args.lam_recon).item() * x.size(0)
@@ -150,7 +183,42 @@ def test(model, test_loader, args):
     return test_loss, correct / len(test_loader.dataset)
 
 
-def train(model, train_loader, test_loader, args):
+def run_kfold(dataset, model, args, k=5, shuffle=True):
+    targets = np.array(dataset.targets)
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=11)
+    classes = dataset.classes
+    fold_accuracies = []
+    fold_loss = []
+    for fold, (train_idx, val_idx) in enumerate(
+        skf.split(np.zeros(len(targets)), targets)
+    ):
+        train_subset = Subset(dataset, train_idx)
+        val_subset = Subset(dataset, val_idx)
+        train_loader = DataLoader(
+            train_subset, batch_size=args.batch_size, shuffle=shuffle
+        )
+        val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
+        best_val_acc, best_val_loss = train(
+            model, train_loader, val_loader, args, fold, classes
+        )
+        fold_accuracies.append(best_val_acc)
+        fold_loss.append(best_val_loss)
+        print(
+            f"Fold {fold}: Best Val Acc: {best_val_acc:.4f}, Best Val Loss: {best_val_loss:.4f}"
+        )
+
+    mean_acc = np.mean(fold_accuracies)
+    std_acc = np.std(fold_accuracies)
+    print(f"K-Fold Accuracy: {mean_acc:.4f} ± {std_acc:.4f}")
+
+    mean_loss = np.mean(fold_loss)
+    std_loss = np.std(fold_loss)
+    print(f"K-Fold Loss: {mean_loss:.4f} ± {std_loss:.4f}")
+
+    return
+
+
+def train(model, train_loader, val_loader, args, fold_n, classes):
     """
     Training a CapsuleNet
     :param model: the CapsuleNet model
@@ -160,12 +228,10 @@ def train(model, train_loader, test_loader, args):
     :return: The trained model
     """
     print("Begin Training" + "-" * 70)
-    from time import time
-    import csv
 
     logfile = open(args.save_dir + "/log.csv", "w")
     logwriter = csv.DictWriter(
-        logfile, fieldnames=["epoch", "loss", "val_loss", "val_acc"]
+        logfile, fieldnames=["epoch", "loss", "val_loss", "val_acc", "fold"]
     )
     logwriter.writeheader()
 
@@ -173,17 +239,23 @@ def train(model, train_loader, test_loader, args):
     optimizer = Adam(model.parameters(), lr=args.lr)
     lr_decay = lr_scheduler.ExponentialLR(optimizer, gamma=args.lr_decay)
     best_val_acc = 0.0
-    for epoch in range(args.epochs):
+    losses = []
+    val_losses = []
+    val_accs = []
+    patience = 10
+    patience_counter = 0
+    best_val_loss = float("inf")
+    for epoch in tqdm(range(args.epochs)):
         model.train()  # set to training mode
-        lr_decay.step()  # decrease the learning rate by multiplying a factor `gamma`
         ti = time()
         training_loss = 0.0
-        for i, (x, y) in enumerate(train_loader):  # batch training
-            device = next(model.parameters()).device
-            y = torch.zeros(y.size(0), 10, device=device).scatter_(
+        for i, (x, y) in enumerate(
+            tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
+        ):  # batch training
+            x, y = x.to(DEVICE), y.to(DEVICE)
+            y = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
                 1, y.view(-1, 1), 1.0
             )
-            x, y = x.to(device), y.to(device)
 
             optimizer.zero_grad()  # set gradients of optimizer to zero
             y_pred, x_recon = model(x, y)  # forward
@@ -192,83 +264,90 @@ def train(model, train_loader, test_loader, args):
             training_loss += loss.item() * x.size(0)  # record the batch loss
             optimizer.step()  # update the trainable parameters with computed gradients
 
+        lr_decay.step()  # decrease the learning rate by multiplying a factor `gamma`
+
         # compute validation loss and acc
-        val_loss, val_acc = test(model, test_loader, args)
+        val_loss, val_acc = test(model, val_loader, args)
+        epoch_loss = training_loss / len(train_loader.dataset)
+        losses.append(epoch_loss)
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
         logwriter.writerow(
             dict(
                 epoch=epoch,
-                loss=training_loss / len(train_loader.dataset),
+                loss=epoch_loss,
                 val_loss=val_loss,
                 val_acc=val_acc,
+                fold=fold_n,
             )
         )
+        logfile.flush()
         print(
-            "==> Epoch %02d: loss=%.5f, val_loss=%.5f, val_acc=%.4f, time=%ds"
-            % (
-                epoch,
-                training_loss / len(train_loader.dataset),
-                val_loss,
-                val_acc,
-                time() - ti,
-            )
+            f"==> fold {fold_n}, epoch {epoch:02d}: loss={epoch_loss:.5f}, val_loss={val_loss:.5f}, val_acc={val_acc:.4f}, time={int(time() - ti)}s"
         )
+
+        # Plot and save loss curve after every epoch
+        plt.figure(figsize=(8, 5))
+        plt.plot(range(1, len(losses) + 1), losses, label="Train Loss")
+        plt.plot(range(1, len(val_losses) + 1), val_losses, label="Val Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("CapsNet Training/Validation Loss")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(args.save_dir + f"/loss_curve_fold{fold_n}.png")
+        plt.close()
+
+        # Plot and save accuracy curve after every epoch
+        plt.figure(figsize=(8, 5))
+        plt.plot(
+            range(1, len(val_accs) + 1),
+            val_accs,
+            label="Val Accuracy",
+            color="tab:orange",
+        )
+        plt.xlabel("Epoch")
+        plt.ylabel("Accuracy")
+        plt.title("CapsNet Validation Accuracy")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(args.save_dir + f"/accuracy_curve_fold{fold_n}.png")
+        plt.close()
+
+        plot_sample_predictions(
+            model,
+            val_loader,
+            class_names=classes,
+            save_dir=args.save_dir,
+            epoch=epoch,
+            fold_n=fold_n,
+        )
+
         if val_acc > best_val_acc:  # update best validation acc and save model
             best_val_acc = val_acc
-            torch.save(model.state_dict(), args.save_dir + "/epoch%d.pkl" % epoch)
-            print("best val_acc increased to %.4f" % best_val_acc)
+            best_val_loss = val_loss
+            torch.save(
+                model.state_dict(), args.save_dir + f"/epoch{epoch}_fold{fold_n}.pkl"
+            )
+            print(f"best val_acc increased to {best_val_acc:.4f}")
+        else:
+            patience_counter += 1
+            print(
+                f"No improvement in validation loss. Patience: {patience_counter}/{patience}"
+            )
+            if patience_counter >= patience:
+                print("Early stopping triggered.")
+                break
+
     logfile.close()
-    torch.save(model.state_dict(), args.save_dir + "/trained_model.pkl")
-    print("Trained model saved to '%s/trained_model.h5'" % args.save_dir)
+    torch.save(model.state_dict(), args.save_dir + f"/trained_model_{fold_n}.pkl")
+    print("Trained model saved to '%s/trained_model_%d.pkl'" % (args.save_dir, fold_n))
     print("Total time = %ds" % (time() - t0))
     print("End Training" + "-" * 70)
-    return model
 
-
-def plot_log(filename, show=True):
-    # load data
-    keys = []
-    values = []
-    with open(filename, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if keys == []:
-                for key, value in row.items():
-                    keys.append(key)
-                    values.append(float(value))
-                continue
-
-            for _, value in row.items():
-                values.append(float(value))
-
-        values = np.reshape(values, newshape=(-1, len(keys)))
-
-    fig = plt.figure(figsize=(4, 6))
-    fig.subplots_adjust(top=0.95, bottom=0.05, right=0.95)
-    fig.add_subplot(211)
-    epoch_axis = 0
-    for i, key in enumerate(keys):
-        if key == "epoch":
-            epoch_axis = i
-            values[:, epoch_axis] += 1
-            break
-    for i, key in enumerate(keys):
-        if key.find("loss") >= 0:  # loss
-            print(values[:, i])
-            plt.plot(values[:, epoch_axis], values[:, i], label=key)
-    plt.legend()
-    plt.title("Training loss")
-
-    fig.add_subplot(212)
-    for i, key in enumerate(keys):
-        if key.find("acc") >= 0:  # acc
-            plt.plot(values[:, epoch_axis], values[:, i], label=key)
-    plt.legend()
-    plt.grid()
-    plt.title("Accuracy")
-
-    # fig.savefig('result/log.png')
-    if show:
-        plt.show()
+    return best_val_acc, best_val_loss
 
 
 def combine_images(generated_images):
