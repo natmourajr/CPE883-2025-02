@@ -9,7 +9,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..',)))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-from modules.models.CKAN.ckan import CKAN
+from models.CKAN.ckan import CKAN
 
 def load_config():
     """Carrega o arquivo de configuração da raiz do projeto."""
