@@ -1,75 +1,17 @@
 # modules/Evaluation/evaluator.py
 
-
 import torch
 import numpy as np
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
-from sklearn.model_selection import StratifiedKFold  # <-- Usa StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.metrics import roc_curve, roc_auc_score
-import matplotlib.pyplot as plt
 import os
+import matplotlib.pyplot as plt
 
-def run_kfold_evaluation_dry_run(model_class, model_name, config):
-    """
-    VERSÃO DE TESTE RÁPIDO ("DRY RUN")
-    Verifica se a estrutura K-Fold e os DataLoaders estão funcionando,
-    sem executar o treinamento completo.
-    """
-    print(f"\n===== MODO DE TESTE RÁPIDO PARA O MODELO: {model_name} =====")
-    
-    full_dataset = TuberculosisDataset(data_dir=config['dataset']['path'])
-    
-    k_folds = config['cross_validation']['n_splits']
-    kf = KFold(n_splits=k_folds, shuffle=True, random_state=config['dataset']['random_seed'])
-    
-    # Loop principal da validação cruzada
-    for fold, (train_indices, val_indices) in enumerate(kf.split(full_dataset)):
-        print("-" * 50)
-        print(f"Verificando Fold {fold + 1}/{k_folds}")
-        
-        train_subset = Subset(full_dataset, train_indices)
-        val_subset = Subset(full_dataset, val_indices)
-        
-        # Apenas as transformações de avaliação são necessárias para este teste
-        eval_transforms = get_image_transforms(image_size=config['model']['image_size'], is_train=False)
-        train_subset.dataset.transform = eval_transforms
-        val_subset.dataset.transform = eval_transforms
-        
-        train_loader = DataLoader(train_subset, batch_size=config['training']['batch_size'], shuffle=True)
-        val_loader = DataLoader(val_subset, batch_size=config['training']['batch_size'], shuffle=False)
-        
-        print(f"  -> Tamanho do treino: {len(train_subset)}, Tamanho da validação: {len(val_subset)}")
-        
-        # --- TESTE DE CARREGAMENTO DE DADOS ---
-        #Tenta carregar um lote de cada loader para ver se funciona
-        try:
-            train_images, train_labels = next(iter(train_loader))
-            print(f"  -> SUCESSO! Carregou um lote de treino com shape de imagens: {train_images.shape}")
-            
-            val_images, val_labels = next(iter(val_loader))
-            print(f"  -> SUCESSO! Carregou um lote de validação com shape de imagens: {val_images.shape}")
-        except Exception as e:
-            print(f"  -> ERRO ao tentar carregar um lote de dados: {e}")
-            # Se der erro aqui, o problema está no dataloader ou nos dados.
-        # --- FIM DO TESTE DE CARREGAMENTO ---
-
-    print("-" * 50)
-    print("Teste da estrutura K-Fold concluído com sucesso!")
-    
-    # Retorna um dicionário vazio pois não calcula métricas
-    return {}
-
-    # device define o dispositivo de hardware (CPU, cuda, se configurado)
-
-
-
-# ATENÇÃO: Verifique se este caminho de importação está correto para a SUA estrutura de pastas.
-# Se você moveu o dataloader, ajuste esta linha conforme necessário.
-from modules.DataLoader.dataloader import TuberculosisDataset 
-
-from modules.Training.utils import EarlyStopping
 from modules.Preprocessing.transforms import get_image_transforms
+from modules.Utils.utils import EarlyStopping
+from dataloaders.xray.dataloader import TuberculosisDataset
 
 def plot_roc_curve(y_true, y_probs, fold, set_name, save_dir):
     """Gera e salva o gráfico da Curva ROC."""
@@ -98,7 +40,6 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
     full_dataset = TuberculosisDataset(data_dir=config['dataset']['path'])
     k_folds = config['cross_validation']['n_splits']
     
-    # Usa StratifiedKFold para garantir a proporção das classes em cada fold
     y_labels = full_dataset.metadata['label'].values
     kf = StratifiedKFold(n_splits=k_folds, shuffle=True, random_state=config['dataset']['random_seed'])
     
