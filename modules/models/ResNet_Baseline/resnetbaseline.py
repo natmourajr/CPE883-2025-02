@@ -13,7 +13,7 @@ from modules.Evaluation.evaluator import run_kfold_evaluation
 # CLASSE DO MODELO BASELINE (ResNet-18 com Fine-Tuning)
 # ============================================================
 class ResNetBaseline(nn.Module):
-    def __init__(self, num_classes=2):
+    def __init__(self, model_config,num_classes=2, device="cpu"):
         super(ResNetBaseline, self).__init__()
 
         # 1. Carrega o modelo ResNet-18 pré-treinado no ImageNet
