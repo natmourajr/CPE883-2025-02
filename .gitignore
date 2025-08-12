@@ -210,3 +210,5 @@ cython_debug/
 .vscode/
 data/
 download_data.py
+cpe883_latest.sif
+results/
