@@ -9,23 +9,12 @@ dataset:
 
 # Seção para os parâmetros da validação cruzada
 cross_validation:
-  n_splits: 10 
+  n_splits: 10 # O 'K' do K-Fold, ou seus "10 sorteios"
 
 training:
-  batch_size: 4
+  batch_size: 16
   num_workers: 2
-  epochs: 5000 # Número de épocas para treinar em cada fold
-  early_stopping_patience: 25
-  
-model:
-  image_size: 128
+  epochs: 5 # Número de épocas para treinar em cada fold
 
-  architecture:
-    # Lista de canais: [entrada, bloco_1_saida, bloco_2_saida, ...]
-    channels: [3, 8, 16]
-    kernel_size: [3, 3]
-    padding: [1, 1]
-    
-    # Parâmetros específicos do KAN
-    grid_size: 4 
-    spline_order: 3 
+model:
+  image_size: 224
