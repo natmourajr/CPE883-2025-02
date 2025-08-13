@@ -4,6 +4,8 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 from torch.utils.data import Dataset
+import torch
+import torchvision.transforms as T
 
 
 class CIFAR10Dataset(Dataset):
@@ -57,14 +59,29 @@ class CIFAR10Dataset(Dataset):
     def __getitem__(self, index):
         img, target = self.data[index], self.targets[index]
         img = img.astype(np.float32) / 255.0  # Convert to float and scale
+
+        # Convert to torch tensor and HWC to CHW
+        img = torch.from_numpy(img).permute(2, 0, 1)
+
+        # Compose default transforms: normalization and random augmentations
+        default_transform = T.Compose(
+            [
+                T.ToPILImage(),
+                T.RandomHorizontalFlip(0.2),
+                T.RandomCrop(32, padding=4),
+                T.ToTensor(),
+                T.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.247, 0.243, 0.261]),
+            ]
+        )
+
+        # Apply user transform if provided, else use default
         if self.transform:
             img = self.transform(img)
+        else:
+            img = default_transform(img)
+
         if self.target_transform:
             target = self.target_transform(target)
-        # Convert to torch tensor
-        import torch
-
-        img = torch.from_numpy(img).permute(2, 0, 1)  # HWC to CHW
         target = torch.tensor(target)
         return img, target
 

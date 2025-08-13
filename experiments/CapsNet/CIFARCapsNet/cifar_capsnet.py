@@ -1,19 +1,13 @@
 import torch
 from cifar_dataloaders import CIFAR10Dataset
-from capsnet import CapsuleNet, train, test, show_reconstruction
+from capsnet import CapsuleNet, run_kfold, test, show_reconstruction
 
 
 def load_cifar10(path="../../../datasets/cifar10", batch_size=100):
-    kwargs = {"num_workers": 1, "pin_memory": True}
+    # kwargs = {"num_workers": 1, "pin_memory": True}
     train_set = CIFAR10Dataset(root=path, train=True)
     test_set = CIFAR10Dataset(root=path, train=False)
-    train_loader = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True, **kwargs
-    )
-    test_loader = torch.utils.data.DataLoader(
-        test_set, batch_size=batch_size, shuffle=True, **kwargs
-    )
-    return train_loader, test_loader
+    return train_set, test_set
 
 
 if __name__ == "__main__":
@@ -77,7 +71,7 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     # load data
-    train_loader, test_loader = load_cifar10(args.data_dir, batch_size=args.batch_size)
+    train_set, test_set = load_cifar10(args.data_dir, batch_size=args.batch_size)
 
     # define model
     model = CapsuleNet(input_size=[3, 32, 32], classes=10, routings=3)
@@ -88,12 +82,15 @@ if __name__ == "__main__":
     if args.weights is not None:  # init the model weights with provided one
         model.load_state_dict(torch.load(args.weights))
     if not args.testing:
-        train(model, train_loader, test_loader, args)
+        run_kfold(train_set, model, args)
     else:  # testing
         if args.weights is None:
             print(
                 "No weights are provided. Will test using random initialized weights."
             )
+        test_loader = torch.utils.data.DataLoader(
+            test_set, batch_size=args.batch_size, shuffle=False
+        )
         test_loss, test_acc = test(model=model, test_loader=test_loader, args=args)
-        print("test acc = %.4f, test loss = %.5f" % (test_acc, test_loss))
+        print(f"test acc = {test_acc:.4f}, test loss = {test_loss:.5f}")
         show_reconstruction(model, test_loader, 50, args)

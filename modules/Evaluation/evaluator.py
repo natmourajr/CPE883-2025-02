@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import KFold
-from modules.DataLoader.dataloader import TuberculosisDataset
+from dataloaders.xray.dataloader import TuberculosisDataset
 from modules.Preprocessing.transforms import get_image_transforms
 
 def run_kfold_evaluation_dry_run(model_class, model_name, config):
