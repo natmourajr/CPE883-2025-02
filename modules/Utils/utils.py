@@ -44,3 +44,21 @@ class EarlyStopping:
             print(f'Perda de validação diminuiu ({self.val_loss_min:.6f} --> {val_loss:.6f}). Salvando modelo ...')
         torch.save(model.state_dict(), self.path)
         self.val_loss_min = val_loss
+
+def print_grad_stats(model):
+    """
+    Imprime a média, desvio padrão, min e max dos gradientes
+    para cada parâmetro treinável do modelo. Útil para depurar
+    problemas de 'vanishing' ou 'exploding' gradients.
+    """
+    print("\n--- Estatísticas dos Gradientes ---")
+    for name, param in model.named_parameters():
+        # Verifica se o parâmetro requer gradiente e se o gradiente existe
+        if param.requires_grad and param.grad is not None:
+            grad = param.grad
+            grad_mean = grad.mean()
+            grad_std = grad.std()
+            grad_min = grad.min()
+            grad_max = grad.max()
+            print(f"{name:<55} | Mean: {grad_mean:.4e} | Std: {grad_std:.4e} | Min: {grad_min:.4e} | Max: {grad_max:.4e}")
+    print("---------------------------------\n")

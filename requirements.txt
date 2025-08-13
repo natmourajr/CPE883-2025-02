@@ -4,6 +4,7 @@
 torch
 torchvision
 torchaudio
+torchinfo
 
 # Manipulação de Dados e EDA
 pandas

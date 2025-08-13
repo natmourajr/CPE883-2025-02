@@ -55,8 +55,8 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
         train_subset = Subset(full_dataset, train_indices)
         val_subset = Subset(full_dataset, val_indices)
         
-        train_transforms = get_image_transforms(image_size=config['model']['image_size'], is_train=True)
-        eval_transforms = get_image_transforms(image_size=config['model']['image_size'], is_train=False)
+        train_transforms = get_image_transforms(image_size=config['preprocessing']['image_size'], is_train=True)
+        eval_transforms = get_image_transforms(image_size=config['preprocessing']['image_size'], is_train=False)
         
         train_subset.dataset.transform = train_transforms
         val_subset.dataset.transform = eval_transforms
@@ -65,8 +65,8 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
         val_loader = DataLoader(val_subset, batch_size=config['training']['batch_size'], shuffle=False)
         
         # Passa o 'model_config' e o 'device' para a classe do modelo
-        model = model_class(model_config=config['model'], num_classes=2, device=device).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        model = model_class(model_config=config, num_classes=2, device=device).to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
         
         # Usa uma perda customizada se for passada (para CapsNet), senão usa o padrão
         if criterion is None:
@@ -83,7 +83,7 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
             for data, labels in train_loader:
                 data, labels = data.to(device), labels.to(device)
 
-                if model_name == "CapsNet":
+                if "CapsNet" in model_name:
                     labels_one_hot = F.one_hot(labels, num_classes=model.num_classes).float()
                     y_pred, reconstruction = model(data, labels_one_hot)
                     loss = criterion(labels_one_hot, y_pred, data, reconstruction)
@@ -101,7 +101,7 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
                 for data, labels in val_loader:
                     data, labels = data.to(device), labels.to(device)
                     
-                    if model_name == "CapsNet":
+                    if "CapsNet" in model_name:
                         labels_one_hot = F.one_hot(labels, num_classes=model.num_classes).float()
                         y_pred, reconstruction = model(data)
                         loss = criterion(labels_one_hot, y_pred, data, reconstruction)
@@ -133,7 +133,7 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
                 for data, labels in data_loader:
                     data, labels = data.to(device), labels.to(device)
                     
-                    if model_name == "CapsNet":
+                    if "CapsNet" in model_name:
                         y_pred, _ = model(data)
                         probabilities = y_pred[:, 1]
                     else:
@@ -152,8 +152,8 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
 
     # Análise final e correta dos resultados
     val_aucs = [float(result['auc_validação']) for result in fold_results]
-    mean_auc = np.mean(val_aucs)
-    std_auc = np.std(val_aucs)
+    mean_auc = float(np.mean(val_aucs))
+    std_auc  = float(np.std(val_aucs))
     
     print("\n" + "-"*50)
     print(f"RESULTADO FINAL PARA O MODELO: {model_name}")

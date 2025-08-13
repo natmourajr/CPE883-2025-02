@@ -9,7 +9,7 @@ class CapsuleLoss(nn.Module):
     def __init__(self, lam_recon=0.5):
         super(CapsuleLoss, self).__init__()
         self.lam_recon = lam_recon
-        self.reconstruction_loss = nn.MSELoss(reduction='sum') # Como no paper original
+        self.reconstruction_loss = nn.MSELoss(reduction='mean') # Como no paper original
 
     def forward(self, y_true, y_pred, x, x_recon):
         """
