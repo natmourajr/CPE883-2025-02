@@ -1,20 +1,65 @@
-# config.yaml
+# config.yaml - Versão Corrigida e Comentada
 
+# ===================================================================
+# 1. PARÂMETROS DE DADOS E VALIDAÇÃO
+# ===================================================================
 dataset:
+  # Caminho para a pasta que contém as imagens. 
+  # Mantido como você ajustou.
   path: "data/images"
-  # Proporções para divisão em [treino, validação, teste]
-  split_ratios: [0.7, 0.15, 0.15]
-  # Semente aleatória para garantir que a divisão seja sempre a mesma
+  
+  # Semente aleatória para garantir que a divisão do K-Fold seja reprodutível.
   random_seed: 42
 
-# Seção para os parâmetros da validação cruzada
 cross_validation:
-  n_splits: 10 # O 'K' do K-Fold, ou seus "10 sorteios"
+  n_splits: 10
 
+# ===================================================================
+# 2. PARÂMETROS DE PRÉ-PROCESSAMENTO
+# ===================================================================
+preprocessing:
+  image_size: 128
+
+# ===================================================================
+# 3. PARÂMETROS DE TREINAMENTO
+# ===================================================================
 training:
-  batch_size: 16
-  num_workers: 2
-  epochs: 5 # Número de épocas para treinar em cada fold
+  optimizer: 'Adam'
+  learning_rate: 0.001
+  
+  batch_size: 4
+  
+  # Definido como 0 para garantir a estabilidade e evitar os problemas de 
+  # "travamento" que encontramos, especialmente em ambientes de container.
+  num_workers: 0
+  
+  epochs: 100
+  early_stopping_patience: 10
 
-model:
-  image_size: 224
+# ===================================================================
+# 4. ARQUITETURAS DOS MODELOS
+# ===================================================================
+architectures:
+
+  CKAN:
+    channels: [3, 8, 16] # Usando a versão mais leve para economizar memória
+    kernel_size: [3, 3]
+    padding: [1, 1]
+    grid_size: 4         # Usando o valor mais recente/menor
+    spline_order: 3
+
+  CapsNet:
+    # Um frontend convolucional muito mais simples, similar ao da CKAN.
+    # [Entrada, Saída Bloco 1, Saída Bloco 2]
+    frontend_channels: [3, 32, 64]
+
+    # Reduzido drasticamente a "largura" da camada de cápsulas.
+    # Antes 256 -> Agora 64 (resultando em 8 tipos de cápsulas, em vez de 32).
+    primary_caps_out_channels: 64
+    primary_caps_dim: 8
+    primary_caps_kernel_size: 5 # Um kernel menor também simplifica
+
+    # Parâmetros das cápsulas de classe
+    digit_caps_dim: 16
+    routings: 3
+    lambda_reconstruction: 0.0005
