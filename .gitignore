@@ -1,5 +1,11 @@
 # Custom
 datasets/
+*.pkl
+*.csv
+*.png
+*.txt
+*.jpeg
+*.jpg
 
 # Repository paths
 dataloaders/benchmark/3w_dataset/data/
