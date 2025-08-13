@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Union
 import pandas as pd
 import numpy as np
+from scipy.signal import spectrogram
 
 TensorLike = Union[torch.Tensor, "np.ndarray", list]
 
@@ -232,3 +233,72 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     plt.pcolormesh(out["t"].cpu(), out["f"].cpu(), out["db"][0,0].cpu(), shading="auto")
     plt.xlabel("Tempo (s)"); plt.ylabel("Frequência (Hz)"); plt.colorbar(label="dB"); plt.show()
+
+def spectrogram_temperature_scipy(
+    serie: pd.Series,
+    win: str = "14D",          # janela em tempo (ex.: '7D', '14D', '30D')
+    hop: str = "12H",          # salto em tempo (ex.: '6H', '12H', '1D')
+    window: str = "hann",      # janela do STFT (hann/hamming/...)
+    scaling: str = "density",  # 'density' (PSD/Hz) ou 'spectrum'
+    detrend: str = "constant", # remove média por segmento
+    to_db: bool = True,
+    amin: float = 1e-12
+):
+    """
+    Retorna:
+      f_cpd: np.ndarray (F,)  frequências em ciclos/dia
+      t_dt:  np.ndarray (T,)  tempos como datetime64 (centro de cada janela)
+      Z:     np.ndarray (F, T) PSD (un^2/Hz) ou dB (se to_db=True)
+      meta:  dict com parâmetros efetivos
+    """
+    s = serie.sort_index().astype("float32").dropna()
+    # Interpola faltantes (frente-trás) se necessário:
+    s = s.reindex(s.index.union(pd.date_range(s.index.min(), s.index.max(), freq=pd.infer_freq(s.index) or None)))
+    s = s.interpolate(limit_direction="both")
+
+    if len(s) < 4:
+        raise ValueError("Série muito curta para espectrograma.")
+
+    # Estimar fs (Hz) a partir do passo mediano
+    dt_sec = np.median(np.diff(s.index.view("i8"))) / 1e9
+    if not np.isfinite(dt_sec) or dt_sec <= 0:
+        raise ValueError("Não foi possível inferir o passo temporal da série.")
+    fs = 1.0 / dt_sec  # Hz
+
+    # Converter janela/salto -> amostras
+    win_len = int(round(pd.Timedelta(win).total_seconds() * fs))
+    hop_len = int(round(pd.Timedelta(hop).total_seconds() * fs))
+    win_len = max(8, min(win_len, len(s)))               # garante limites válidos
+    hop_len = max(1, hop_len)
+    noverlap = max(0, min(win_len - hop_len, win_len - 1))
+
+    # SciPy spectrogram
+    f, t, Sxx = spectrogram(
+        s.to_numpy(),
+        fs=fs,
+        window=window,
+        nperseg=win_len,
+        noverlap=noverlap,
+        nfft=None,              # usa nperseg; mude para potência de 2 se quiser
+        detrend=detrend,
+        scaling=scaling,        # 'density' → PSD/Hz
+        mode="psd",             # retorna potência espectral
+    )
+
+    # Frequência em ciclos/dia
+    f_cpd = f * 86400.0
+
+    # Tempo em datetime (centro de cada janela)
+    t0 = s.index[0]
+    t_dt = t0 + pd.to_timedelta(t, unit="s")
+
+    # Opcional em dB
+    if to_db:
+        Z = 10.0 * np.log10(np.maximum(Sxx, amin))
+    else:
+        Z = Sxx
+
+    meta = dict(fs=fs, win_len=win_len, hop_len=hop_len, noverlap=noverlap,
+                window=window, scaling=scaling, detrend=detrend, to_db=to_db)
+
+    return f_cpd, t_dt.to_numpy(), Z, meta
