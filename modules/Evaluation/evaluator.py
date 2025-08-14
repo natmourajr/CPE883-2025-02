@@ -66,7 +66,9 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
         
         # Passa o 'model_config' e o 'device' para a classe do modelo
         model = model_class(model_config=config, num_classes=2, device=device).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
+        lr = config['training'].get('learning_rate', 0.001)
+        wd = float(config['training'].get('weight_decay', 0.0))
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
         
         # Usa uma perda customizada se for passada (para CapsNet), senão usa o padrão
         if criterion is None:
@@ -80,6 +82,7 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
         for epoch in range(epochs):
             model.train()
             # Loop de treino 
+            train_loss_sum = 0.0
             for data, labels in train_loader:
                 data, labels = data.to(device), labels.to(device)
 
@@ -94,6 +97,7 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                train_loss_sum += loss.item()
 
             model.eval()
             val_loss = 0.0
@@ -110,9 +114,9 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, criter
                         loss = criterion(outputs, labels)
                     
                     val_loss += loss.item()
-            
+            avg_train_loss = train_loss_sum / len(train_loader)
             avg_val_loss = val_loss / len(val_loader)
-            print(f"  Época {epoch + 1}/{epochs}, Perda de Validação: {avg_val_loss:.6f}")
+            print(f"  Época {epoch + 1}/{epochs}, Perda de Treino: {avg_train_loss:.6f}, Perda de Validação: {avg_val_loss:.6f}")
 
             # Lógica do Early Stopping
             early_stopper(avg_val_loss, model)
