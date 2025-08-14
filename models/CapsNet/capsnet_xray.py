@@ -80,8 +80,8 @@ class CapsNet(nn.Module):
              reconstruction = self.decoder(reconstruction_input)
              reconstruction = reconstruction.view(-1, 3, self.image_size, self.image_size)
         else:
-            # Se y_one_hot for None mesmo no treino, não podemos fazer a reconstrução.
-            # Retornamos um tensor vazio para compatibilidade.
+            # Se y_one_hot for None mesmo no treino, não pode fazer a reconstrução.
+            # Retorna um tensor vazio para compatibilidade.
             reconstruction = torch.zeros_like(x)
 
         return y_pred, reconstruction
@@ -162,8 +162,8 @@ class CapsNetStrided(nn.Module):
              reconstruction = self.decoder(reconstruction_input)
              reconstruction = reconstruction.view(-1, 3, self.image_size, self.image_size)
         else:
-            # Se y_one_hot for None mesmo no treino, não podemos fazer a reconstrução.
-            # Retornamos um tensor vazio para compatibilidade.
+            # Se y_one_hot for None mesmo no treino, não pode fazer a reconstrução.
+            # Retornaum tensor vazio para compatibilidade.
             reconstruction = torch.zeros_like(x)
 
         return y_pred, reconstruction

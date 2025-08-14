@@ -58,7 +58,7 @@ def main():
     # 2. Inicializa o modelo, a perda e o otimizador
     model = CapsNet(model_config=config, num_classes=2, device=device).to(device)
     
-    lam_recon = 0.0 # Desativamos a reconstrução para simplificar o teste
+    lam_recon = 0.0 # Desativa a reconstrução para simplificar o teste
     criterion = CapsuleLoss(lam_recon=lam_recon)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=config['training'].get('learning_rate', 0.001))

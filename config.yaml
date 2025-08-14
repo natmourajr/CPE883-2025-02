@@ -26,11 +26,8 @@ preprocessing:
 training:
   optimizer: 'Adam'
   learning_rate: 0.001
-  
+  weight_decay: 1e-4
   batch_size: 4
-  
-  # Definido como 0 para garantir a estabilidade e evitar os problemas de 
-  # "travamento" que encontramos, especialmente em ambientes de container.
   num_workers: 0
   
   epochs: 100
