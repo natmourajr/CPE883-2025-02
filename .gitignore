@@ -212,3 +212,4 @@ data/
 download_data.py
 cpe883_latest.sif
 results/
+experiments/cnn_test

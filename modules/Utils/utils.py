@@ -1,0 +1,64 @@
+# modules/Utils/utils.py
+import numpy as np
+import torch
+
+class EarlyStopping:
+    """Para o treinamento se a perda de validação não melhorar após um determinado número de épocas."""
+    def __init__(self, patience=5, verbose=False, delta=0, path='checkpoint.pt'):
+        """
+        Args:
+            patience (int): Quantas épocas esperar após a última vez que a perda de validação melhorou.
+            verbose (bool): Se True, imprime uma mensagem para cada melhoria na perda de validação.
+            delta (float): Mudança mínima na quantidade monitorada para se qualificar como uma melhoria.
+            path (str): Caminho para salvar o checkpoint do melhor modelo.
+        """
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = np.inf
+        self.delta = delta
+        self.path = path
+
+    def __call__(self, val_loss, model):
+        score = -val_loss
+
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} de {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(val_loss, model)
+            self.counter = 0
+
+    def save_checkpoint(self, val_loss, model):
+        """Salva o modelo quando a perda de validação diminui."""
+        if self.verbose:
+            print(f'Perda de validação diminuiu ({self.val_loss_min:.6f} --> {val_loss:.6f}). Salvando modelo ...')
+        torch.save(model.state_dict(), self.path)
+        self.val_loss_min = val_loss
+
+def print_grad_stats(model):
+    """
+    Imprime a média, desvio padrão, min e max dos gradientes
+    para cada parâmetro treinável do modelo. Útil para depurar
+    problemas de 'vanishing' ou 'exploding' gradients.
+    """
+    print("\n--- Estatísticas dos Gradientes ---")
+    for name, param in model.named_parameters():
+        # Verifica se o parâmetro requer gradiente e se o gradiente existe
+        if param.requires_grad and param.grad is not None:
+            grad = param.grad
+            grad_mean = grad.mean()
+            grad_std = grad.std()
+            grad_min = grad.min()
+            grad_max = grad.max()
+            print(f"{name:<55} | Mean: {grad_mean:.4e} | Std: {grad_std:.4e} | Min: {grad_min:.4e} | Max: {grad_max:.4e}")
+    print("---------------------------------\n")
