@@ -91,7 +91,7 @@ class JumpODEEncoder(nn.Module):
     - ODEFunc integra h(t) entre eventos.
     - Self‑attention usa máscara para faltantes (opcional).
     """
-    def __init__(self, in_dim, hidden_dim, attn_heads=4, k_dim=None, q_dim=None, num_layers=2, dropout=0.1, ff_dim=None):
+    def __init__(self, in_dim, hidden_dim, attn_heads=4, num_layers=2, dropout=0.1, ff_dim=None):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.attn_heads = attn_heads
@@ -100,14 +100,10 @@ class JumpODEEncoder(nn.Module):
         enc_layer = nn.TransformerEncoderLayer(
             nhead=attn_heads,
             d_model=hidden_dim,
-            k_dim=hidden_dim or k_dim,
-            q_dim=hidden_dim or q_dim,
-            causal=True,  # causal para séries temporais
             norm_first=True,  # normalização antes da atenção
             dropout=dropout,  # dropout opcional
-            dim_feedforward= self.hidden_dim * 2 or ff_dim,  # feedforward dimension
-            activation='relu',  # ativação ReLU
-            batch_first=True,  # residual connections
+            dim_feedforward= self.hidden_dim * 4 or ff_dim,  # feedforward dimension
+            batch_first=True,
         )
 
         self.transformer = nn.TransformerEncoder(
@@ -115,30 +111,33 @@ class JumpODEEncoder(nn.Module):
             num_layers=num_layers,
             norm=nn.LayerNorm(hidden_dim)
         )
+
+    @staticmethod
+    def _causal_mask(L, device):
+        # Máscara triangular superior (impede olhar para o futuro)
+        return torch.triu(torch.full((L, L), float('-inf'), device=device), diagonal=1)    
         
     def forward(self, x, ts):
         """
-        x  : (B, T, C)       – valores (já no espaço latente se houver encoder linear)
-        ts : (B, T)          – segundos unix
-        mask: (B, T, 1) bool – True se valor presente (p/ atenção); None → tudo presente
+        x  : (B, T, C)
+        ts : (B, T)   segundos unix (normalizados ou não)
         """
         B, T, _ = x.shape
         h = torch.zeros(B, self.hidden_dim, device=x.device)
         states = []
-        
-        for i in range(T):
-            if i > 0:                         # integra de t_{i-1} → t_i
 
+        for i in range(T):
+            if i > 0:
                 dt_i = (ts[:, i] - ts[:, i-1]).float().unsqueeze(-1)  # (B,1)
-                h = h + dt_i * self.odefunc(None, h)   
-            # jump ‑ atualiza estado com valor observado
-            h = self.gru(x[:, i], h)
+                h = h + dt_i * self.odefunc(None, h)                 # Euler
+            h = self.gru(x[:, i], h)                                 # jump
             states.append(h)
-        
-        H = torch.stack(states, dim=1)        # (B, T, hidden_dim)
-        H = H.permute(1, 0, 2)  # (T, B, hidden_dim) para Transformer
-        H = H + self.transformer(H)  # (T, B, hidden_dim)
-        H = H.permute(1, 0, 2)  # (B, T, hidden_dim)
+
+        H = torch.stack(states, dim=1)   # (B, T, hidden_dim)
+
+        # máscara causal (L,L) para o Transformer (batch_first=True)
+        causal = self._causal_mask(T, x.device)  # (T,T) com -inf acima da diagonal
+        H = H + self.transformer(H, mask=causal) # (B, T, hidden_dim)
         return H
 
 class DiffTimeEmbedding(nn.Module):
@@ -181,65 +180,56 @@ class TSDiffusion(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        latent_dim: int = None,
-        model_dim: int = 64,
-        hidden_dim: int = 128,
+        status_dim: int,
+        hidden_dim: int = 256,
         num_steps: int = 1000,
         n_heads: int = 4,
-        #n_layers: int = 4,
-        #pos_dim: int = 16,
-        static_dim: int = 0
+        n_layers: int = 4,
+        static_dim: int = 0,
+        
     ):
         super().__init__()
         self.val_loss = float('inf')
-        self.model_dim = model_dim
+        self.model_dim = hidden_dim
+        self.status_dim = status_dim
         self.num_steps = num_steps
-        self.latent_dim = latent_dim or in_channels
         self.in_channels = in_channels
-        if latent_dim is not None:
-            self.encoder = nn.Sequential(
-                nn.Linear(in_channels*2, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, latent_dim),
-            )
-            self.decoder = nn.Sequential(
-                nn.Linear(latent_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, in_channels),
-            )
+        self.encoder = nn.Sequential(
+            nn.Linear(in_channels*2, hidden_dim),
+            nn.ReLU(),
+        )
+        self.decoder = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(hidden_dim, in_channels),
+        )
         # Projeções
-        self.input_proj = nn.Linear(self.latent_dim, model_dim)
         self.pos_enc = Time2Vec()
-        self.pos_proj = nn.Linear(4, model_dim)
-        self.t_embed = DiffTimeEmbedding(model_dim)
+        self.pos_proj = nn.Linear(4, hidden_dim)
+        self.t_embed = DiffTimeEmbedding(hidden_dim)
         self.static_dim = static_dim
-        head_dim = model_dim
         if static_dim > 0:
             self.static_proj = nn.Sequential(
-                nn.Linear(static_dim, model_dim),
+                nn.Linear(static_dim, hidden_dim),
                 nn.ReLU()
             )
         # (a) λ(t)  — intensity do ponto de observação
         self.lambda_head = nn.Sequential(
-            nn.Linear(head_dim, head_dim // 2),
+            nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(head_dim // 2, 1)       # escalar
+            nn.Linear(hidden_dim // 2, 1)       # escalar
         )
         # (b) μ_x(t)  — média gaussiana para L1
-        self.mean_head = nn.Sequential(
+        '''self.mean_head = nn.Sequential(
             nn.ReLU(),
-            nn.LayerNorm(self.model_dim),  # normaliza saída
-            nn.Linear(self.model_dim, self.in_channels),
-        )
+            nn.Linear(self.model_dim, self.in_channels)
+        )'''
         # (c) μ_Tmax  — previsão do horizonte da série
         self.tmax_head = nn.Sequential(
-            nn.Linear(head_dim, head_dim // 2),
+            nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(head_dim // 2, 1),
-            nn.Sigmoid()        # range 0‑1
+            nn.Linear(hidden_dim // 2, status_dim)
         )
-        self.output_proj = nn.Linear(model_dim, self.latent_dim)
-        self.encoder_ode = JumpODEEncoder(model_dim, model_dim, attn_heads=n_heads)
+        self.encoder_ode = JumpODEEncoder(hidden_dim, hidden_dim, attn_heads=n_heads, num_layers=n_layers)
         # (d) m_b  — probabilidade de observação (Bernoulli) para L4
         self.miss_head = nn.Linear(self.model_dim, 1)
         # Schedule de difusão
@@ -256,7 +246,8 @@ class TSDiffusion(nn.Module):
         timestamps: torch.Tensor = None,
         static_feats: torch.Tensor = None,
         already_latent: bool=False,
-        return_state: bool=False,
+        return_pred_state: bool=False,
+        return_x_hat: bool=False,
         mask = None
     ) -> torch.Tensor:
         """
@@ -266,16 +257,14 @@ class TSDiffusion(nn.Module):
             timestamps: (batch, seq_len) - colunas de tempo.
             static_feats: (batch, static_dim).
         """
-        b, seq_len, _ = x.shape
-        device = x.device
         noise = None
         # Embedding de entrada
-        if hasattr(self, 'encoder') and not already_latent:
+        if not already_latent:
             x = self.encoder(torch.cat([x, mask], dim=-1))
             noise = torch.randn_like(x)
             ab = self.alpha_bar[t].view(-1, 1, 1)
             x = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
-        h = self.input_proj(x)
+        h = x
         # Static features
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
@@ -285,7 +274,6 @@ class TSDiffusion(nn.Module):
             raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
         te = self.t_embed(t).unsqueeze(1)          # (b,1,model_dim)
         h = h + te
-        h = F.layer_norm(h,(self.model_dim,))
         h = self.encoder_ode(h, timestamps, mask=mask)   # (B,T,model_dim)
 
         # Transformer
@@ -294,90 +282,7 @@ class TSDiffusion(nn.Module):
         #h = h.permute(1, 0, 2)  # (b, seq_len, model_dim)
         # Previsão de ruído
         state = h
-        eps_pred = self.output_proj(h)
-        if return_state:
-            return eps_pred, state, noise
-        return eps_pred
-
-    @torch.no_grad()
-    def sample(
-        self,
-        batch_size: int,
-        Tmax_scale: float = 1.1,        # δ para T̂_max
-        lam_pad: float = 1.2,           # cota adaptativa de λ_max
-        sampling_steps: int = None,
-        device: torch.device = None
-    ):
-        device = device or next(self.parameters()).device
-
-        # 1) Reverse‑diffusion para obter z₀
-        steps = min(sampling_steps or self.num_steps, self.num_steps)
-        z = torch.randn(batch_size, 1, self.latent_dim, device=device)
-        for i in reversed(range(steps)):
-            t = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            eps = self.forward(z, t, timestamps=None,
-                               static_feats=None,
-                               already_latent=True, return_state=False)
-            a, ab = self.alpha[i], self.alpha_bar[i]
-            noise = torch.randn_like(z) if i > 0 else torch.zeros_like(z)
-            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*eps) \
-                + torch.sqrt(self.beta[i]) * noise
-
-        # 2) Projeta z₀ para o espaço de estado contínuo (model_dim)
-        h = self.input_proj(z.squeeze(1))   # shape (B, model_dim)
-
-        # 3) Thinning
-        samples = []
-        for b in range(batch_size):
-            t_cur = 0.0
-            hb = h[b]  # estado inicial deste exemplo, shape (model_dim,)
-            Tmax_pred = self.tmax_head(hb.unsqueeze(0)).item() * Tmax_scale
-
-            # estima λ_max inicial
-            lam0 = F.softplus(self.lambda_head(hb.unsqueeze(0))).item()
-            lam_max = lam0 * lam_pad + 1e-4
-
-            times, values = [], []
-            while t_cur < Tmax_pred:
-                w = torch.empty(1, device=device).exponential_(lam_max)
-                dt = w.item()
-                t_cur += dt
-                if t_cur >= Tmax_pred:
-                    break
-
-                # --------- dinâmica contínua ---------
-                hb0 = hb.unsqueeze(0)                                    # (1, model_dim)
-                k1  = self.encoder_ode.odefunc(None, hb0).squeeze(0)     # f(h)
-                hb  = hb + w * k1                                        # Euler
-
-                # --------- cabeças λ(t) e μ_x(t) ---------
-                lam_t = F.softplus(self.lambda_head(hb.unsqueeze(0))).item()
-                mu_x  = self.mean_head(hb.unsqueeze(0)).squeeze(0)
-
-                # 3.4 Thinning accept/reject
-                if torch.rand(1, device=device).item() < lam_t / lam_max:
-                    xi = mu_x + torch.randn_like(mu_x)
-                    times.append(t_cur)
-                    values.append(xi)
-
-                # 3.5 Ajuste adaptativo de λ_max se necessário
-                if lam_t > lam_max:
-                    lam_max = lam_t * lam_pad
-
-            # 4) Decodifica valores de volta ao espaço original
-            if hasattr(self, 'decoder'):
-                if values:
-                    vals = torch.stack(values)
-                else:
-                    vals = torch.empty(0, self.latent_dim, device=device)
-                vals = self.decoder(vals)
-            else:
-                vals = torch.stack(values) if values else torch.empty(0, self.latent_dim, device=device)
-
-            samples.append((torch.tensor(times, device=device), vals))
-
-        return samples
-
+        return state, noise, self.decoder(state) if return_x_hat else None, self.tmax_head(state) if return_pred_state else None
 
     @torch.no_grad()
     def impute(
@@ -398,16 +303,16 @@ class TSDiffusion(nn.Module):
 
             a, ab = self.alpha[i], self.alpha_bar[i]
             t   = torch.full((z.size(0),), i, device=device, dtype=torch.long)
-            eps, state, noise = self.forward(
+            state, _, _, _ = self.forward(
                 z, t,
                 timestamps=timestamps, static_feats=static_feats,
                 already_latent=True, return_state=True 
             )
-            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*eps)
+            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*state)
             if i > 0:
                 z = z + torch.sqrt(self.beta[i]) * torch.randn_like(z)
 
-        x_hat = self.mean_head(state) * (1 - mask) + x_obs * mask
+        x_hat = self.decoder(state) * (1 - mask) + x_obs * mask
         return x_hat
 
             #gamma = 0.1                                   # 0<γ≤1
@@ -451,6 +356,7 @@ class TSDiffusion(nn.Module):
             window_size: int = 600, 
             feature_cols: list = default_features + [f'state-{s}' for s in range(10)], 
             static_features_cols: list = [f'{f}_relative_max' for f in default_features], 
+            predict_state_cols: list = [f'state-pred-{s}' for s in range(10)],
             epochs: int = 10,
             batch_size: int = 32,
             lr: float = 1e-3,
@@ -465,7 +371,7 @@ class TSDiffusion(nn.Module):
         loader.load_stats('./stats.pkl')
         for i in range(1, epochs+1):
             test = pd.DataFrame()
-            datasets = loader.preprocess()
+            datasets = loader.preprocess(include_status_pred=True)
             for num_dataset, dataset in enumerate(datasets):
                 if num_dataset < len(loader.stats['ids']) - test_datasets:
                     print(f'Starting epoch {i}/{epochs} - dataset {num_dataset+1}/{len(loader.stats["ids"])} - Partial Validation Loss: {self.val_loss:.6f}' )
@@ -479,6 +385,7 @@ class TSDiffusion(nn.Module):
                                 df_val=df_val,
                                 feature_cols=feature_cols,
                                 static_features_cols=static_features_cols,
+                                predict_state_cols=predict_state_cols,
                                 timestamp_col='index',
                                 epochs=1,
                                 batch_size=batch_size,
@@ -493,6 +400,7 @@ class TSDiffusion(nn.Module):
                             df_val=None,
                             feature_cols=feature_cols,
                             static_features_cols=static_features_cols,
+                            predict_state_cols=predict_state_cols,
                             timestamp_col='index',
                             epochs=1,
                             batch_size=batch_size,
@@ -507,6 +415,7 @@ class TSDiffusion(nn.Module):
             test_loss = self.test_model(
                 df_test=test,
                 feature_cols=feature_cols,
+                predict_state_cols=predict_state_cols,
                 static_features_cols=static_features_cols,
                 timestamp_col='index',
                 window_size=window_size,
@@ -527,65 +436,44 @@ class TSDiffusion(nn.Module):
     def _compute_loss(
         self,
         x: torch.Tensor,
-        eps_pred: torch.Tensor,
+        x_hat: torch.Tensor,
+        tmax: torch.Tensor,
         state: torch.Tensor,
         ts_batch: torch.Tensor,
         mask: torch.Tensor,
         mask_train: torch.Tensor,
-        noise: torch.Tensor
+        noise: torch.Tensor,
+        state_pred: torch.Tensor
     ):
         """
         Computa a perda de difusão para um lote de dados.
         """
-        m = mask
-        m_train = mask_train
-        # x  : (B, T, C)   ex. (32, 1000, 15)
-        lam_t = F.softplus(self.lambda_head(state)).clamp(1e-3, 10.0)
-        mu_x  = self.mean_head(state)                          # (B,T,latent_dim)      # (B,T,1)
-        # 3) Número de canais realmente observados em cada timestamp    
-        lam2 = lam_t.squeeze(-1).clamp_(min=1e-3, max=50)      # in‑place ✔
-        err2   = (((x - mu_x) * m) ** 2).sum(-1, keepdim=True) # (B,T,1)
-        log_px = -0.5 * err2    # -½ λ‖x-μ‖²
-        log_px = log_px.squeeze(-1) - 0.5 * torch.log(lam2 + 1e-8)     # +½ log λ
-        #print(m.shape)
-                            
-        ts  = ts_batch                                         # (B,T)  já em segundos                
-        # 1. parte observada – regra do trapézio
-        dt          = ts[:, 1:] - ts[:, :-1]                   # (B,T‑1)
-        int_obs     = 0.5 * (lam2[:, :-1] + lam2[:, 1:]) * dt    # (B,T‑1)
-        integral_obs = int_obs.sum(-1)                         # (B,)
+        # ---------- L1: log-likelihood Gaussiano ponderado por λ ----------
+        # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação
+        lam_t = F.softplus(self.lambda_head(state)).clamp(1e-3, 50.0)  # (B,T,1)
+        lam2  = lam_t.squeeze(-1)                                      # (B,T)
 
-        # 2. cauda até T̂_max (μ_Tmax predito)
-        mu_Tmax = self.tmax_head(state[:, -1])    # (B,)
-        tail_dt = torch.relu(mu_Tmax.squeeze(-1) - ts[:, -1])              # (B,)
-        integral_tail = lam2[:, -1] * tail_dt                   # (B,)
+        # erro ao longo dos C canais observados
+        sqerr = ((x - x_hat)**2 * mask).sum(dim=-1, keepdim=True)      # (B,T,1)
 
-        integral_total = integral_obs + integral_tail          # (B,)
-
-        # ---------- Loss L1 completa ----------
-        # log_px já contém -0.5*sum(...)
-
-        log_event = log_px.sum(-1)  # soma sobre T
-        # se quiser reduzir por seq_len use .mean(-1)
-        m_t = m_train.any(dim=2, keepdim=True).float() 
-        L1 = -(log_event - integral_total).mean()
+        # -½ λ ||x-μ||^2  +  ½ log λ
+        log_px = -0.5 * sqerr * lam2.unsqueeze(-1)                     # (B,T,1)
+        # normaliza por quantidade de observações para não depender de C/T
+        obs_per_t = mask.sum(dim=-1).clamp(min=1.0)                    # (B,T)
+        log_px = log_px.squeeze(-1) + 0.5 * obs_per_t * torch.log(lam2 + 1e-8)  # (B,T)   # (B,T)
+        l1_seq = (log_px / obs_per_t).sum(dim=-1)                      # (B,)
+        L1 = -l1_seq.mean()
         
         # Perda do ruído
-        L2 = F.mse_loss(eps_pred, noise) # (B,T)
-        
-        #L2 = (L2 * (1 - m_t)).sum() / (1 - m_t).sum().clamp(min=1.0)
-        # ---------- L3  (horizonte máximo) ----------
-        tN      = ts_batch[:, -1].unsqueeze(-1)   # (B,1)
-        L3 = ((tN*1.1 - mu_Tmax).pow(2)).mean()
+        L2 = F.mse_loss(state, noise) # (B,T)
+                          # (B,T,S)
+        L3 = F.mse_loss(tmax,state_pred)
         # ----- L4 (máscara) -----
         # máscara binária: 1 se ao menos um canal está presente no timestep
                 # (B, T, 1)
-
+        m_t = mask_train.any(dim=2, keepdim=True).float()              # (B,T,1)
         mb_pred = torch.sigmoid(self.miss_head(state)).clamp(1e-4, 1-1e-4)  # (B, T, 1)
-
-        ce = m_t * torch.log(mb_pred + 1e-8) + \
-            (1 - m_t) * torch.log(1 - mb_pred + 1e-8)
-        L4 = -ce.mean()
+        L4 = F.binary_cross_entropy(mb_pred, m_t)
         if L2.item()>0.3:
             loss = L2
         else:
@@ -595,6 +483,7 @@ class TSDiffusion(nn.Module):
         self,
         df_test: pd.DataFrame,
         feature_cols: list,
+        predict_state_cols: list,
         static_features_cols: list,
         timestamp_col: str,
         window_size: int = None,
@@ -602,7 +491,7 @@ class TSDiffusion(nn.Module):
     ):
         batch_size = 200
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        test_ds = self._make_dataset(df_test, timestamp_col, window_size, feature_cols, static_features_cols)
+        test_ds = self._make_dataset(df_test, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
         test_loader = DataLoader(test_ds, batch_size=batch_size)
         self.eval()
         total_loss = 0.0
@@ -613,9 +502,9 @@ class TSDiffusion(nn.Module):
         with torch.no_grad():
             for batch in test_loader:
                 if len(batch) == 4:
-                    x, ts_batch, m, s = batch
+                    x, ts_batch, m, p, s = batch
                 else:                               # caso não haja static
-                    x, ts_batch, m = batch;  s = None
+                    x, ts_batch, m, p = batch;  s = None
                 x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
                 if s is not None: s = s.to(device)
                 t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
@@ -628,9 +517,10 @@ class TSDiffusion(nn.Module):
                 x_masked = x * m_test
                 noise = torch.randn_like(x)
                 #x_t = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
-                eps_pred, state, noise = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_state=True, mask=m_test)
+                state, noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_x_hat=True, 
+                                                         return_pred_state=True, mask=m_test)
                 loss, L1, L2, L3, L4 = self._compute_loss(
-                    x, eps_pred, state, ts_batch, m, m, noise
+                    x, x_hat, tmax, state, ts_batch, m, m, noise, p
                 )
                 total_loss += loss.item() * x.size(0)
                 total_l1 += L1
@@ -647,7 +537,7 @@ class TSDiffusion(nn.Module):
         return avg_loss, avg_l1, avg_l2, avg_l3, avg_l4
     
     @staticmethod
-    def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols):
+    def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols):
         if timestamp_col != 'index':
             df = df.sort_values(timestamp_col).reset_index(drop=True)
 # ---------------- NORMALIZAÇÃO DO TEMPO ----------------
@@ -658,6 +548,17 @@ class TSDiffusion(nn.Module):
 
         ts_np = ts_raw.to_numpy(dtype=np.float32)
         ts_rel = (ts_np - t0) / TS_SPAN                 # começa em 0
+
+        # garante numérico; valores inválidos viram NaN
+        state_pred = df[predict_state_cols].values
+
+        # normaliza para [0,1] usando o mesmo t0/TS_SPAN do resto do código
+        state_pred = (state_pred - t0) / TS_SPAN
+
+        # para o tensor:
+        state_pred = np.nam_to_num(state_pred, nan=0.0)
+        data_state_pred = torch.tensor(state_pred.to_numpy(), dtype=torch.float32)
+        
         #span = ts_rel[-1] if ts_rel[-1] > 0 else 1  # evita div/0
         #ts_rel = ts_rel / span                      # agora 0‑1
 
@@ -674,15 +575,17 @@ class TSDiffusion(nn.Module):
             ts_seqs = times.unsqueeze(0)
             stat_seqs = static[0].unsqueeze(0) if static is not None else None
             mask_seqs = mask.unsqueeze(0)   # (1,L,C)
+            state_pred_seqs = data_state_pred.unsqueeze(0)
         else:
             n_ws = len(df) - window_size + 1
             seqs = torch.stack([data[i:i+window_size] for i in range(n_ws)])
             ts_seqs = torch.stack([times[i:i+window_size] for i in range(n_ws)])
             mask_seqs = torch.stack([mask[i:i+window_size] for i in range(n_ws)])
             stat_seqs = static[0].unsqueeze(0).repeat(n_ws, 1)  if static is not None else None
+            state_pred_seqs = torch.stack([data_state_pred[i:i+window_size] for i in range(n_ws)])
         if stat_seqs is None:
-            return TensorDataset(seqs, ts_seqs, mask_seqs)                   # 3 itens
-        return TensorDataset(seqs, ts_seqs, mask_seqs, stat_seqs)   
+            return TensorDataset(seqs, ts_seqs, mask_seqs,state_pred_seqs)                   # 3 itens
+        return TensorDataset(seqs, ts_seqs, mask_seqs, state_pred_seqs, stat_seqs)   
     # --------------------------------------------------------------------------
     # NOVO MÉTODO: sample_continue --------------------------------------------
     # --------------------------------------------------------------------------
@@ -749,6 +652,7 @@ class TSDiffusion(nn.Module):
         df_val: pd.DataFrame,
         feature_cols: list,
         static_features_cols: list,
+        predict_state_cols: list,
         timestamp_col: str,
         epochs: int = 10,
         batch_size: int = 32,
@@ -760,8 +664,8 @@ class TSDiffusion(nn.Module):
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols)
-        val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols)
+        train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols,predict_state_cols)
+        val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=batch_size) if df_val is not None else None
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9,0.999),
@@ -772,9 +676,9 @@ class TSDiffusion(nn.Module):
             self.train()
             for batch in train_loader:
                 if len(batch) == 4:
-                    x, ts_batch, m, s = batch
+                    x, ts_batch, m, p, s = batch
                 else:                               # caso não haja static
-                    x, ts_batch, m = batch;  s = None
+                    x, ts_batch, m, p = batch;  s = None
                 x, ts_batch, m = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True)
                 if s is not None: s = s.to(device, non_blocking = True)
                 t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
@@ -788,10 +692,11 @@ class TSDiffusion(nn.Module):
                 #x_t = torch.sqrt(ab) * x_masked + torch.sqrt(1 - ab) * noise
                 #m_latent = self._make_mask(m_train, self.latent_dim)  # (B,T,latent_dim)
                 #m_model = self._make_mask(m_train, self.model_dim)    # (B,T,model_dim)
-                eps_pred, state, noise  = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_state=True, mask=m_train)
+                state, noise, x_hat, tmax  = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, 
+                                                          return_pred_state=True, return_x_hat=True, mask=m_train)
                 # ---------- cabeças ----------
                 loss,_,_,_,_= self._compute_loss(
-                    x, eps_pred, state, ts_batch, m_train, mask_train=m_train, noise=noise
+                    x, x_hat, tmax, state, ts_batch, m_train, m_train,noise, p
                 )
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
                 total_train += loss.item() * x.size(0) * batch_size
@@ -818,9 +723,9 @@ class TSDiffusion(nn.Module):
                         rand_mask = (torch.rand_like(m) > p_drop_t).float()
                         m_val   = m * rand_mask
                         x_masked = x * m_val
-                        eps_pred , state , noise = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, mask=m_val, return_state=True)
+                        state , noise = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, mask=m_val, return_state=True)
                         loss, L1, L2, L3, L4 = self._compute_loss(
-                            x, eps_pred, state, ts_batch, m, mask_train=m, noise=noise
+                            x, state, ts_batch, m, mask_train=m, noise=noise
                         )
                         total_val += (lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4)
                         total_l1 += L1
@@ -850,59 +755,6 @@ class TSDiffusion(nn.Module):
         model = cls(*args, **kwargs)
         model.load_state_dict(torch.load(path, map_location='cpu'))
         return model
-
-    @torch.no_grad()
-    def sample_regular(
-        self,
-        batch_size: int = 1,
-        seq_len:   int = 15,
-        delta_t:   float = 1.0,
-        static_feats: torch.Tensor = None,
-        sampling_steps: int = None,
-        device: torch.device = None,
-    ):
-        """
-        Gera (times, values) — ambos em espaço **normalizado** (z‑score).
-        """
-        device = device or next(self.parameters()).device
-        steps  = min(sampling_steps or self.num_steps, self.num_steps)
-
-        # --- dentro de sample_regular ----------------------------------------
-        ts_grid = (
-            torch.arange(seq_len, device=device, dtype=torch.float32) * delta_t
-        ).unsqueeze(0).repeat(batch_size, 1)
-
-        # normaliza: 0‑1 exactamente como em _make_dataset()
-        ts_grid = ts_grid / ts_grid[:, -1:].clamp(min=1.0)
-
-        # estado inicial (ruído)
-        z = torch.randn(batch_size, seq_len, self.latent_dim, device=device)
-
-        if static_feats is not None:
-            static_feats = static_feats.to(device=device, dtype=torch.float32)
-
-        # reverse‑diffusion
-        for i in reversed(range(steps)):
-            t = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            eps = self.forward(
-                z, t, timestamps=ts_grid,
-                static_feats=static_feats,
-                already_latent=True
-            )
-            a, ab = self.alpha[i], self.alpha_bar[i]
-            noise = torch.randn_like(z) if i > 0 else torch.zeros_like(z)
-            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*eps) \
-                + torch.sqrt(self.beta[i]) * noise
-
-        if hasattr(self, "decoder"):
-            z = torch.nn.functional.layer_norm(
-                z, normalized_shape=(self.latent_dim,)
-            )                      # evita “explosão” inicial
-            z = self.decoder(z)      # continua em z‑score
-
-        return [(ts_grid[b].cpu().numpy(), z[b].cpu().numpy())
-                for b in range(batch_size)]
-
 
 
     # ------------------------------------------------------------------
@@ -1150,9 +1002,6 @@ class TSDiffusion(nn.Module):
             z = torch.sqrt(ab) * z + torch.sqrt(1 - ab) * noise
 
             # ------------------- Difusão (saída) ----------
-            eps    = self.forward(z, t_rand,
-                                timestamps=ts_batch,
-                                static_feats=s, mask=m, already_latent=True)
             #mse_noise += F.mse_loss(eps, noise,
                                     #reduction='none').sum((0,1)).cpu().numpy()
 

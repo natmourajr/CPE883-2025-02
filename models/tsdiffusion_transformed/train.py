@@ -8,9 +8,10 @@ if __name__ == '__main__':
     from .ts_diffusion3 import TSDiffusion
 
     ld = Loader3W()
-    ld.get_ids_from_wells_with_event_type([8])
-    ld.extract_stats(['ABER-CKP', 'P-ANULAR', 'P-PDG','P-TPT','T-MON-CKP','T-PDG','T-TPT'])
-    ld.save_stats('stats.pkl')
+    #ld.get_ids_from_wells_with_event_type([8])
+    #ld.extract_stats(['ABER-CKP', 'P-ANULAR', 'P-PDG','P-TPT','T-MON-CKP','T-PDG','T-TPT'])
+    #ld.save_stats('stats.pkl')
+    ld.load_stats('stats.pkl')
 
     ts_diffusion = TSDiffusion(
         in_channels=17,

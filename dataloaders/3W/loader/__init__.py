@@ -66,7 +66,7 @@ class Loader3W(object):
         with open(filename, 'rb') as f:
             self.stats = load(f)
 
-    def preprocess(self):
+    def preprocess(self,include_status_pred=False, status_pred_window=60*60):
         for i in self.stats['ids']:
             dataset = self.load_real_instance(i)[['well']+list(self.stats['features'].keys())+['state']]
             for well in dataset['well'].unique():
@@ -83,6 +83,30 @@ class Loader3W(object):
                 
             for s in range(10):
                 dataset[f'state-{s}'] = (dataset['state'] == s).astype(int)
+
+            if include_status_pred:
+                status_pred = [[]]*10
+                c = 0
+                state = dataset['state'][0].item()
+                for row in dataset.itertuples():
+                    c+=1
+                    if row.state != state:
+                        state = row.state
+                        for i in range(10):
+                            if i == state:
+                                if c > status_pred_window:
+                                    status_pred[i] += [float('NaN')] * (c - status_pred_window)
+                                    status_pred[i]+= [row.index] * status_pred_window
+                                else:
+                                    status_pred[i] += [row.index] * c
+                            else:
+                                status_pred[i] += [float('NaN')] * c
+                        c = 0
+
+                for i in range(10):
+                    status_pred[i] += [float('NaN')] * c
+                    dataset[f'state-pred-{i}'] = np.array(status_pred[i],dtype=np.float32)
+
             yield dataset
                     
 
