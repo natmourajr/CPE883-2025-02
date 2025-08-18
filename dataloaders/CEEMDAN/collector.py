@@ -17,7 +17,12 @@ References:
 import pandas as pd
 import os
 import numpy as np
+from matplotlib import pyplot as plt
+import pywt
+from scipy.signal import stft
 from sklearn.preprocessing import StandardScaler
+from torch.utils.data import Dataset
+import torch
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset/'
 
@@ -32,7 +37,7 @@ class Collector:
         pass
 
     
-    def read_data(self, file, year=2017):
+    def read_data(self, file, serie_size, window_size, predict_steps, year=2017, freq_transform=True):
         
         if file=='final_la_haute_R0711.csv':
             P_col = 'P_avg'
@@ -51,8 +56,19 @@ class Collector:
         df = self.create_date_feats(df)
         new_data=df[['Month','Year','Date', P_col]]
         new_data=new_data[new_data.Year == year]
+
+        signal = df['P_avg'].values[0:serie_size]
+        time = df['Date'].values[0:serie_size]
+
+        X, y = create_sliding_windows_and_targets(signal, window_size=window_size, predict_steps=predict_steps)
+
+        if freq_transform:
+            coefficients_list = []
+            coefficients_list = create_freq_transform(X)
+
+        dataset = CoefficientsDataset(coefficients_list, y)
     
-        return new_data
+        return dataset
 
     def create_date_feats(self, df):
 
@@ -60,6 +76,106 @@ class Collector:
         df['Month'] = df['Date'].dt.month
 
         return df
+
+
+def create_sliding_windows_and_targets(signal, window_size=100, predict_steps=1):
+    X_windows = []
+    y_targets = []
+
+    for i in range(len(signal) - window_size - predict_steps + 1):
+        window = signal[i : i + window_size]
+        target = signal[i + window_size : i + window_size + predict_steps]
+        X_windows.append(window)
+        y_targets.append(target)
+
+    return np.array(X_windows), np.array(y_targets)
+
+
+def create_freq_transform(X, log=False, plot=False, transform_method='wavelets'):
+
+    coefficients_list = []
+
+    for x_window in X:
+        
+        # Assign the signal series of the window
+        signal = x_window
+        # Create a time index (Need to change to the real date index)
+        time = np.arange(0, len(signal))
+        
+        if transform_method=='wavelets':
+            # Parameters for CWT
+            # Choose Haar wavelet for CWT
+            wavelet = 'mexh'
+            scales = np.arange(0.5, 10, 0.1)  # Range of scales to analyze, adjust as needed
+
+            # Perform CWT
+            coefficients, frequencies = pywt.cwt(signal, scales, wavelet)
+
+            # coefficients.shape = (num_scales, signal_length)
+
+            if plot:
+                fig, ax = plt.subplots(2, figsize=(12, 6))
+
+                # Plot the signal
+                ax[0].plot(time, signal)
+                ax[0].set_title('Original P_avg Signal')
+                ax[0].set_xlabel('Time Index')
+                ax[0].set_ylabel('Amplitude')
+
+                # Plot scalogram
+                pcm = ax[1].pcolormesh(time, scales, coefficients, shading='auto', cmap='jet')
+                ax[1].set_ylabel('Scale')
+                ax[1].set_xlabel('Time Index')
+                ax[1].set_title('Scalogram (CWT) of P_avg signal')
+
+                # Add colorbar for scalogram
+                fig.colorbar(pcm, ax=ax[1], label='Magnitude')
+
+                # Invert the y axis. Generally in scalogram its commom to see the scales inverted
+                # and the frequencies as it is
+                ax[1].invert_yaxis()
+
+                if log:
+                    pass
+                    # ax[1].set_yscale('log')
+                    # Invert the y-axis because extent flips it
+                    # ax[1].invert_yaxis()  # to keep scale increasing from bottom to top
+
+
+                plt.tight_layout()
+                plt.show()
+
+            coefficients_list.append(coefficients)
+
+        if transform_method=='stft':
+                f, t, Zxx = stft(signal, window='hann', nperseg=10, noverlap=4)
+                spectrogram = np.abs(Zxx)
+
+                if plot:
+                    plt.figure(figsize=(12, 5))
+                    plt.pcolormesh(t, f, spectrogram, shading='gouraud')
+                    plt.title('STFT Magnitude Spectrogram')
+                    plt.ylabel('Frequency [Hz]')
+                    plt.xlabel('Time [sec]')
+                    plt.colorbar(label='Magnitude')
+                    plt.tight_layout()
+                    plt.show()
+                coefficients_list.append(spectrogram)
+
+    return np.array(coefficients_list)
+
+
+# Coefficients Dataset
+class CoefficientsDataset(Dataset):
+    def __init__(self, coefficients, targets):
+        self.X = torch.tensor(coefficients, dtype=torch.float32).unsqueeze(1)  # shape: (B, 1, S, T)
+        self.y = torch.tensor(targets, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
 
 
 class CreateTrainTest():

@@ -352,21 +352,17 @@ def CapsNet(input_shape, n_class, routings,inst_parameter):
         lambda x: K.expand_dims(x, 2),
         output_shape=lambda s: (s[0], s[1], 1, s[2], s[3])
     )(l2)
-#    l2 = Lambda(lambda x: tf.transpose(x,[0,3,2,1]))(l2)
-    l2 = Lambda(
-        lambda x: K.expand_dims(x, 2),
-        output_shape=lambda s: (s[0], s[1], 1, s[2])
-    )(l2)
+    #    l2 = Lambda(lambda x: tf.transpose(x,[0,3,2,1]))(l2)
+    l2 = Reshape((6, 6, 10, 32))(l2)
     l2 = ConvCapsuleLayer3(kernel_size=3, num_capsule=10, num_atoms=8, strides=1, padding='same', routings=3)(l2)
     l2 = BatchNormalization()(l2)
     
     
-    l1 = Lambda(lambda x: K.expand_dims(x,2))(l)
-    l1 = layers.Reshape((360,1,8,8))(l1)
     l1 = Lambda(
-        lambda x: K.expand_dims(x, 2),
-        output_shape=lambda s: (s[0], s[1], 1, s[2])
-    )(l1)
+        lambda x: K.expand_dims(x, 2),  # Insert dimension at axis=2
+        output_shape=lambda s: (s[0], s[1], 1, s[2])  # New shape: (None, 360, 1, 64)
+    )(l)
+    l1 = layers.Reshape((360,1,8,8))(l1)
     l1 = ConvCapsuleLayer3(kernel_size=3, num_capsule=8, num_atoms=8, strides=1, padding='same', routings=3)(l1)
     l1 = BatchNormalization()(l1)
     
@@ -377,11 +373,11 @@ def CapsNet(input_shape, n_class, routings,inst_parameter):
 #     lb = FlattenCaps()(l_skip)
     
     l = Concatanate_mid()([la, lb])
-    print(l.get_shape())
+    # print(l.get_shape())
 #    layers.Concatenate(axis=-2)([la, lb])
     
     digitcaps = CapsuleLayer(num_capsule=n_class, dim_capsule=inst_parameter, routings=routings,
-                             name='digitcaps')(l)
+                             name='digitcaps', channels=8)(l)
 
     # Layer 4: This is an auxiliary layer to replace each capsule with its length. Just to match the true label's shape.
     # If using tensorflow, this will not be necessary. :)
