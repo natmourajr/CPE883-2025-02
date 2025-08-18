@@ -363,7 +363,8 @@ class TSDiffusion(nn.Module):
             test_datasets: int = 2,
             validate: bool = True,
             early_stopping: bool = True,
-            patience: int = 5
+            patience: int = 5,
+            status_pred_window: int = 600
             ):
         lower_loss = float('inf')
         test_patience = patience
@@ -371,7 +372,7 @@ class TSDiffusion(nn.Module):
         loader.load_stats('./stats.pkl')
         for i in range(1, epochs+1):
             test = pd.DataFrame()
-            datasets = loader.preprocess(include_status_pred=True)
+            datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
             for num_dataset, dataset in enumerate(datasets):
                 if num_dataset < len(loader.stats['ids']) - test_datasets:
                     print(f'Starting epoch {i}/{epochs} - dataset {num_dataset+1}/{len(loader.stats["ids"])} - Partial Validation Loss: {self.val_loss:.6f}' )
@@ -467,7 +468,9 @@ class TSDiffusion(nn.Module):
         # Perda do ruído
         L2 = F.mse_loss(state, noise) # (B,T)
                           # (B,T,S)
-        L3 = F.mse_loss(tmax,state_pred)
+        offset_state_pred = state_pred - ts_batch.unsqueeze(-1)
+        offset_tmax = tmax - ts_batch.unsqueeze(-1) 
+        L3 = F.mse_loss(offset_tmax,offset_state_pred)
         # ----- L4 (máscara) -----
         # máscara binária: 1 se ao menos um canal está presente no timestep
                 # (B, T, 1)
