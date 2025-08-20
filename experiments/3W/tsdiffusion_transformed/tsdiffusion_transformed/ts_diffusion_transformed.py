@@ -13,7 +13,7 @@ import math
 t0 = 1735689600.0    
 max_drop = 0.9
 TS_SPAN = 60 * 60 * 24 * 365
-lam = [0.25, 0.25, 0.25, 0.25] #Diferente do artigo para convergir mais rápido.
+lam = [0.25, 0.25, 0.4, 0.1] #Diferente do artigo para convergir mais rápido.
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 if os.environ.get('path3WLoader'): sys.path.append(os.environ.get('path3WLoader'))
 from loader import Loader3W
@@ -286,7 +286,7 @@ class TSDiffusion(nn.Module):
 
     @torch.no_grad()
     def impute(
-        self, x_obs, mask, timestamps=None, static_feats=None,
+        self, x_obs, mask, timestamps, static_feats=None,
         sampling_steps=None, device=None
     ):
         self.eval()
@@ -306,7 +306,7 @@ class TSDiffusion(nn.Module):
             state, _, _, _ = self.forward(
                 z, t,
                 timestamps=timestamps, static_feats=static_feats,
-                already_latent=True, return_state=True 
+                already_latent=True 
             )
             z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*state)
             if i > 0:
@@ -351,6 +351,37 @@ class TSDiffusion(nn.Module):
 
         return (z * sd + mu).cpu().numpy()         # (T,C)
     # ------------------------------------------------------------------
+
+    def test3W(
+            self, 
+            window_size: int = 600, 
+            feature_cols: list = default_features + [f'state-{s}' for s in range(10)], 
+            static_features_cols: list = [f'{f}_relative_max' for f in default_features], 
+            predict_state_cols: list = [f'state-pred-{s}' for s in range(10)],
+            batch_size: int = 32,
+            test_datasets: int = 2,
+            status_pred_window: int = 600
+            ):
+        loader = Loader3W()
+        loader.load_stats('./stats.pkl')
+        test = pd.DataFrame()
+        datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
+        for num_dataset, dataset in enumerate(datasets):
+            if num_dataset >= len(loader.stats['ids']) - test_datasets:
+                test = pd.concat([test, dataset], ignore_index=True)
+
+        test_loss = self.test_model(
+            df_test=test,
+            feature_cols=feature_cols,
+            predict_state_cols=predict_state_cols,
+            static_features_cols=static_features_cols,
+            timestamp_col='index',
+            window_size=window_size,
+            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        )
+        print(f'Test Loss: {test_loss[0]:.6f}')
+        print(f'Test L1: {test_loss[1]:.6f}, Test L2: {test_loss[2]:.6f}, Test L3: {test_loss[3]:.6f}, Test L4: {test_loss[4]:.6f}')
+
     def train3W(
             self, 
             window_size: int = 600, 
@@ -453,18 +484,19 @@ class TSDiffusion(nn.Module):
         # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação
         lam_t = F.softplus(self.lambda_head(state)).clamp(1e-3, 50.0)  # (B,T,1)
         lam2  = lam_t.squeeze(-1)                                      # (B,T)
-
+        mask_err = mask * (1 - mask_train)
         # erro ao longo dos C canais observados
-        sqerr = ((x - x_hat)**2 * mask).sum(dim=-1, keepdim=True)      # (B,T,1)
+        sqerr = ((x - x_hat)**2 * mask_err).sum(dim=-1, keepdim=True)      # (B,T,1)
 
         # -½ λ ||x-μ||^2  +  ½ log λ
-        log_px = -0.5 * sqerr * lam2.unsqueeze(-1)                     # (B,T,1)
+        log_px = -0.5 * torch.log(sqerr * lam2.unsqueeze(-1) + 1e-8)                   # (B,T,1)
         # normaliza por quantidade de observações para não depender de C/T
-        obs_per_t = mask.sum(dim=-1).clamp(min=1.0)                    # (B,T)
-        log_px = log_px.squeeze(-1) + 0.5 * obs_per_t * torch.log(lam2 + 1e-8)  # (B,T)   # (B,T)
-        l1_seq = (log_px / obs_per_t).sum(dim=-1)                      # (B,)
+        #obs_per_t = mask_err.sum(dim=-1).clamp(min=1.0)                    # (B,T)
+        log_px = log_px.squeeze(-1) + 0.5 * torch.log(lam2 + 1e-8)  # (B,T)   # (B,T)
+        l1_seq = log_px.sum(dim=-1)                      # (B,)
         L1 = -l1_seq.mean()
         
+        #L1 = F.mse_loss(x*mask_err,x_hat*mask_err)
         # Perda do ruído
         L2 = F.mse_loss(state, noise) # (B,T)
                           # (B,T,S)
@@ -523,7 +555,7 @@ class TSDiffusion(nn.Module):
                 state, noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_x_hat=True, 
                                                          return_pred_state=True, mask=m_test)
                 loss, L1, L2, L3, L4 = self._compute_loss(
-                    x, x_hat, tmax, state, ts_batch, m, m, noise, p
+                    x, x_hat, tmax, state, ts_batch, m, m_test, noise, p
                 )
                 total_loss += loss.item() * x.size(0)
                 total_l1 += L1
@@ -699,7 +731,7 @@ class TSDiffusion(nn.Module):
                                                           return_pred_state=True, return_x_hat=True, mask=m_train)
                 # ---------- cabeças ----------
                 loss,_,_,_,_= self._compute_loss(
-                    x, x_hat, tmax, state, ts_batch, m_train, m_train,noise, p
+                    x, x_hat, tmax, state, ts_batch, m, m_train,noise, p
                 )
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
                 total_train += loss.item() * x.size(0) * batch_size
@@ -728,7 +760,7 @@ class TSDiffusion(nn.Module):
                         x_masked = x * m_val
                         state , noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, mask=m_val, return_x_hat=True, return_pred_state=True)
                         loss, L1, L2, L3, L4 = self._compute_loss(
-                            x, x_hat, tmax,state, ts_batch, m, mask_train=m, noise=noise, state_pred=p
+                            x, x_hat, tmax,state, ts_batch, m, mask_train=m_val, noise=noise, state_pred=p
                         )
                         total_val += (lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4)
                         total_l1 += L1
@@ -965,6 +997,7 @@ class TSDiffusion(nn.Module):
             raise ValueError("in_channels incompatível.")
 
         static_cols = [c for c in all_ds.columns if c.endswith("_relative_max")]
+        state_pred_cols = [c for c in all_ds.columns if c.startswith('state-pred')]
         all_ids = list(loader.stats['ids'])
         # pega só os *N* últimos
         eval_pairs = list(zip(all_ids[-test_datasets:], all_ds))
@@ -976,7 +1009,8 @@ class TSDiffusion(nn.Module):
             df, timestamp_col='index',
             window_size=window_size,
             feature_cols=feature_cols,
-            static_features_cols=static_cols
+            static_features_cols=static_cols,
+            predict_state_cols=state_pred_cols
         )
         loader_ds = DataLoader(t_dataset, batch_size=batch_size)
         feat_names = feature_cols
@@ -989,11 +1023,11 @@ class TSDiffusion(nn.Module):
 
         for batch in loader_ds:
             # ------------------- unpack -------------------
-            if len(batch) == 4:
-                x, ts_batch, m, s = batch
+            if len(batch) == 5:
+                x, ts_batch, m, p, s = batch
             else:
-                x, ts_batch, m = batch; s = None
-            x, ts_batch, m = [t.to(device) for t in (x, ts_batch, m)]
+                x, ts_batch, m, p = batch; s = None
+            x, ts_batch, m, p = [t.to(device) for t in (x, ts_batch, m, p)]
             s = s.to(device) if s is not None else None
 
             # ------------------- Difusão (ruído) ----------
