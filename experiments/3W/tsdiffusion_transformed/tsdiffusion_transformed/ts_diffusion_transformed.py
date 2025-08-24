@@ -11,9 +11,9 @@ import math
 # --- cole na classe TSDiffusion -------------------------------------------
 
 t0 = 1735689600.0    
-max_drop = 0.9
+max_drop = 0.7
 TS_SPAN = 60 * 60 * 24 * 365
-lam = [0.25, 0.25, 0.4, 0.1] #Diferente do artigo para convergir mais rápido.
+lam = [0.3, 0.3, 0.3, 0.1] #Diferente do artigo para convergir mais rápido.
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 if os.environ.get('path3WLoader'): sys.path.append(os.environ.get('path3WLoader'))
 from loader import Loader3W
@@ -129,7 +129,11 @@ class JumpODEEncoder(nn.Module):
         for i in range(T):
             if i > 0:
                 dt_i = (ts[:, i] - ts[:, i-1]).float().unsqueeze(-1)  # (B,1)
-                h = h + dt_i * self.odefunc(None, h)                 # Euler
+                f1 = self.odefunc(None, h)
+                f2 = self.odefunc(None, h + 0.5*dt_i*f1)
+                f3 = self.odefunc(None, h + 0.5*dt_i*f2)
+                f4 = self.odefunc(None, h + dt_i*f3)
+                h  = h + (dt_i/6.0)*(f1 + 2*f2 + 2*f3 + f4)
             h = self.gru(x[:, i], h)                                 # jump
             states.append(h)
 
@@ -218,11 +222,14 @@ class TSDiffusion(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, 1)       # escalar
         )
-        # (b) μ_x(t)  — média gaussiana para L1
-        '''self.mean_head = nn.Sequential(
+        # (a) λ(t)  — intensity do ponto de observação
+        self.lambda_tmax_head = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(self.model_dim, self.in_channels)
-        )'''
+            nn.Linear(hidden_dim // 2, 1)       # escalar
+        )
+        # predição do ruído introjetado no estado
+        self.noise_head = nn.Linear(hidden_dim,hidden_dim)
         # (c) μ_Tmax  — previsão do horizonte da série
         self.tmax_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -269,7 +276,7 @@ class TSDiffusion(nn.Module):
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
             h = h + se
-        # Positional encoding via Time2Vec
+        # Positional encoding via DiffTimeEmbedding
         if timestamps is None:
             raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
         te = self.t_embed(t).unsqueeze(1)          # (b,1,model_dim)
@@ -308,7 +315,7 @@ class TSDiffusion(nn.Module):
                 timestamps=timestamps, static_feats=static_feats,
                 already_latent=True 
             )
-            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*state)
+            z = (1/torch.sqrt(a)) * (z - ((1-a)/torch.sqrt(1-ab))*self.noise_head(state))
             if i > 0:
                 z = z + torch.sqrt(self.beta[i]) * torch.randn_like(z)
 
@@ -401,24 +408,29 @@ class TSDiffusion(nn.Module):
         test_patience = patience
         loader = Loader3W()
         loader.load_stats('./stats.pkl')
+        delta_pred_window = np.float32(status_pred_window / TS_SPAN)
         for i in range(1, epochs+1):
+            print(f'Starting epoch {i}/{epochs}')
             test = pd.DataFrame()
             datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
             for num_dataset, dataset in enumerate(datasets):
                 if num_dataset < len(loader.stats['ids']) - test_datasets:
-                    print(f'Starting epoch {i}/{epochs} - dataset {num_dataset+1}/{len(loader.stats["ids"])} - Partial Validation Loss: {self.val_loss:.6f}' )
+                    train_loss_dataset = [[0.0,0.0] for _ in range(4)]
+                    val_loss_dataset = [[0.0,0.0] for _ in range(4)]
                     if validate:
                         tscv = TimeSeriesSplit(n_splits=5)
+                        partial_split = 1
                         for train_idx, val_idx in tscv.split(dataset):
                             df_train = dataset.iloc[train_idx]
                             df_val = dataset.iloc[val_idx]
-                            self.train_model(
+                            results = self.train_model(
                                 df_train=df_train,
                                 df_val=df_val,
                                 feature_cols=feature_cols,
                                 static_features_cols=static_features_cols,
                                 predict_state_cols=predict_state_cols,
                                 timestamp_col='index',
+                                status_pred_window=delta_pred_window,
                                 epochs=1,
                                 batch_size=batch_size,
                                 lr=lr,
@@ -426,33 +438,54 @@ class TSDiffusion(nn.Module):
                                 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
                                 verbose=False
                             )
+                            for idx in range(4):
+                                train_loss_dataset[idx][0]+=results[0][idx][0]
+                                train_loss_dataset[idx][1]+=results[0][idx][1]
+                                val_loss_dataset[idx][0]+=results[1][idx][0]
+                                val_loss_dataset[idx][1]+=results[1][idx][1]
+                            train_loss = [item[0]/item[1] for item in train_loss_dataset]
+                            train_loss_total = sum([item*lam[idx] for idx,item in enumerate(train_loss)]) 
+                            val_loss = [item[0]/item[1] for item in val_loss_dataset]
+                            val_loss_total = sum([item*lam[idx] for idx,item in enumerate(val_loss)]) 
+                            print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])} - Parcial {partial_split}/5' +
+                                  f'- Loss - Train: {train_loss_total:.6f} Val: {val_loss_total:.6f}')
+                            print(f'(Train/Val) L1:{train_loss[0]:.6f}/{val_loss[0]:.6f}, L2: {train_loss[1]:.6f}/{val_loss[1]:.6f}, ' +
+                                f'L3: {train_loss[2]:.6f}/{val_loss[2]:.6f}, L4: {train_loss[3]:.6f}/{val_loss[3]:.6f}')  
+                            partial_split+=1
                     else:
-                        self.train_model(
+                        results = self.train_model(
                             df_train=dataset,
                             df_val=None,
                             feature_cols=feature_cols,
                             static_features_cols=static_features_cols,
                             predict_state_cols=predict_state_cols,
                             timestamp_col='index',
+                            status_pred_window=delta_pred_window,
                             epochs=1,
                             batch_size=batch_size,
                             lr=lr,
                             window_size=window_size,
                             device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
                             verbose=False
-                        )                    
+                        )              
+      
+    
                 else:
                     test = pd.concat([test, dataset], ignore_index=True)
+
 
             test_loss = self.test_model(
                 df_test=test,
                 feature_cols=feature_cols,
                 predict_state_cols=predict_state_cols,
                 static_features_cols=static_features_cols,
+                status_pred_window=delta_pred_window,
                 timestamp_col='index',
                 window_size=window_size,
                 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             )
+            test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
+            test_loss_total = sum([item*lam[i] for i,item in enumerate(test_loss)])
             if early_stopping and test_loss[0] < lower_loss:
                 self.save(f'ts_diffusion.pt')
                 lower_loss = test_loss[0]
@@ -460,11 +493,12 @@ class TSDiffusion(nn.Module):
             else:
                 test_patience -= 1
                 if test_patience <= 0:
-                    print(f'Early stopping at epoch {i}/{epochs} - Test Loss: {test_loss[0]:.6f}')
-                    print(f'Test L1: {test_loss[1]:.6f}, Test L2: {test_loss[2]:.6f}, Test L3: {test_loss[3]:.6f}, Test L4: {test_loss[4]:.6f}')
+                    
+                    print(f'Early stopping at epoch {i}/{epochs} - Test Loss: {test_loss_total:.6f}')
+                    print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')
                     break
-            print(f'Epoch {i}/{epochs} completed - Test Loss: {test_loss[0]:.6f}')
-            print(f'Test L1: {test_loss[1]:.6f}, Test L2: {test_loss[2]:.6f}, Test L3: {test_loss[3]:.6f}, Test L4: {test_loss[4]:.6f}')
+            print(f'Epoch {i}/{epochs} completed - Test Loss: {test_loss_total:.6f}')
+            print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')
     def _compute_loss(
         self,
         x: torch.Tensor,
@@ -475,45 +509,71 @@ class TSDiffusion(nn.Module):
         mask: torch.Tensor,
         mask_train: torch.Tensor,
         noise: torch.Tensor,
-        state_pred: torch.Tensor
+        state_pred: torch.Tensor,
+        status_pred_window: np.float32
     ):
-        """
-        Computa a perda de difusão para um lote de dados.
-        """
-        # ---------- L1: log-likelihood Gaussiano ponderado por λ ----------
-        # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação
-        lam_t = F.softplus(self.lambda_head(state)).clamp(1e-3, 50.0)  # (B,T,1)
-        lam2  = lam_t.squeeze(-1)                                      # (B,T)
-        mask_err = mask * (1 - mask_train)
-        # erro ao longo dos C canais observados
-        sqerr = ((x - x_hat)**2 * mask_err).sum(dim=-1, keepdim=True)      # (B,T,1)
-
-        # -½ λ ||x-μ||^2  +  ½ log λ
-        log_px = -0.5 * torch.log(sqerr * lam2.unsqueeze(-1) + 1e-8)                   # (B,T,1)
-        # normaliza por quantidade de observações para não depender de C/T
-        #obs_per_t = mask_err.sum(dim=-1).clamp(min=1.0)                    # (B,T)
-        log_px = log_px.squeeze(-1) + 0.5 * torch.log(lam2 + 1e-8)  # (B,T)   # (B,T)
-        l1_seq = log_px.sum(dim=-1)                      # (B,)
-        L1 = -l1_seq.mean()
+# ---------- L1: log-likelihood Gaussiano ponderado por λ ---------- # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação 
+        lam_t = F.softplus(self.lambda_head(state)).clamp(max=1e+8) # (B,T,1) 
+        lam2 = lam_t.squeeze(-1) # (B,T) 
+        mask_err = mask * (1 - mask_train) # erro ao longo dos C canais observados 
+        sse = ((x - x_hat)**2 * mask_err).sum(dim=-1) # (B,T) 
+        nobs = mask_err.sum(dim=-1).clamp(min=1e-8) # -½ λ ||x-μ||^2 + ½ log λ 
+        valid = (nobs > 0).float()   
+        log_px = -0.5 * (lam2 * sse) + 0.5 * nobs * torch.log(lam2 + 1e-8) - 0.5 * nobs * math.log(2*math.pi) # (B,T) 
+        # Se quiser normalizar para não depender de C/T, use média por observação: # loss por (B,T) normalizada por nobs: 
+        neg_log_px = -(log_px *valid) # (B,T) 
+        L1 = neg_log_px.sum() # escalar
         
-        #L1 = F.mse_loss(x*mask_err,x_hat*mask_err)
         # Perda do ruído
-        L2 = F.mse_loss(state, noise) # (B,T)
+        L2 = F.mse_loss(self.noise_head(state), noise,reduction='sum') # (B,T)
                           # (B,T,S)
-        offset_state_pred = state_pred - ts_batch.unsqueeze(-1)
-        offset_tmax = tmax - ts_batch.unsqueeze(-1) 
-        L3 = F.mse_loss(offset_tmax,offset_state_pred)
+        lam_t_tmax = F.softplus(self.lambda_tmax_head(state)).clamp(min=1e-8, max=1e8)  # (B,T,1)
+        lam2_tmax  = lam_t_tmax.squeeze(-1)                                            # (B,T)
+        offset_state_pred = (state_pred - ts_batch.unsqueeze(-1)).clamp(min=0)
+        offset_tmax = (tmax - ts_batch.unsqueeze(-1)).clamp(min=0)  
+        changing_state = (offset_state_pred>0).float()
+        offset_state_pred = (status_pred_window*changing_state - offset_state_pred).clamp(min=0)
+        offset_tmax = (status_pred_window - offset_tmax).clamp(min=0)
+
+
+        err = offset_tmax - offset_state_pred   # (B,T,S)
+        err_no_change = err * (1-changing_state)
+        err_change = err * changing_state
+        sse_tmax_no_change = (err_no_change**2).sum(dim=-1)              # (B,T)  soma sobre S
+        sse_tmax_change = (err_change**2).sum(dim=-1)*1000
+        S = err.size(2)
+        log_ptmax = (
+            - 0.5 * lam2_tmax * sse_tmax_no_change
+            - 0.5 * lam2_tmax * sse_tmax_change
+            + 0.5 * S * torch.log(lam2_tmax + 1e-8)
+            - 0.5 * S * math.log(2 * math.pi)
+        )                                       # (B,T)
+
+        # Média por timestep (B,T). Se preferir, some e divida por B*T explicitamente.
+        L3 = -(log_ptmax.sum())
         # ----- L4 (máscara) -----
         # máscara binária: 1 se ao menos um canal está presente no timestep
                 # (B, T, 1)
         m_t = mask_train.any(dim=2, keepdim=True).float()              # (B,T,1)
         mb_pred = torch.sigmoid(self.miss_head(state)).clamp(1e-4, 1-1e-4)  # (B, T, 1)
-        L4 = F.binary_cross_entropy(mb_pred, m_t)
+        L4 = F.binary_cross_entropy(mb_pred, m_t, reduction='sum')
         #if L2.item()>0.3:
         #    loss = L2
         #else:
-        loss = lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4
-        return loss, L1.item() * x.size(0), L2.item() * x.size(0), L3.item() * x.size(0), L4.item() * x.size(0)
+        L1_div = (nobs*valid).sum().clamp(min=1.0)
+        L2_div = float(state.size(0)*state.size(1)*state.size(2))
+        L3_div = (changing_state.sum() * 1000 + (1-changing_state).sum()).clamp(min=0.0)
+        L4_div = float(mb_pred.size(0)*mb_pred.size(1)*mb_pred.size(2))
+
+
+        loss = lam[0]*L1/L1_div + lam[1]*L2/L2_div + lam[2]*L3/L3_div + lam[3]*L4/L4_div
+
+        return (loss,
+                (float(L1.item()), float(L1_div.item())),
+                (float(L2.item()), float(L2_div)),
+                (float(L3.item()), float(L3_div.item())),
+                (float(L4.item()), float(L4_div)))
+    
     def test_model(
         self,
         df_test: pd.DataFrame,
@@ -521,6 +581,7 @@ class TSDiffusion(nn.Module):
         predict_state_cols: list,
         static_features_cols: list,
         timestamp_col: str,
+        status_pred_window: np.float32,
         window_size: int = None,
         device: torch.device = None
     ):
@@ -529,11 +590,7 @@ class TSDiffusion(nn.Module):
         test_ds = self._make_dataset(df_test, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
         test_loader = DataLoader(test_ds, batch_size=batch_size)
         self.eval()
-        total_loss = 0.0
-        total_l1 = 0.0
-        total_l2 = 0.0
-        total_l3 = 0.0
-        total_l4 = 0.0
+        total_loss = [[0.0, 0.0] for _ in range(4)]
         with torch.no_grad():
             for batch in test_loader:
                 if len(batch) == 5:
@@ -555,21 +612,13 @@ class TSDiffusion(nn.Module):
                 state, noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_x_hat=True, 
                                                          return_pred_state=True, mask=m_test)
                 loss, L1, L2, L3, L4 = self._compute_loss(
-                    x, x_hat, tmax, state, ts_batch, m, m_test, noise, p
+                    x, x_hat, tmax, state, ts_batch, m, m_test, noise, p, status_pred_window
                 )
-                total_loss += loss.item() * x.size(0)
-                total_l1 += L1
-                total_l2 += L2
-                total_l3 += L3
-                total_l4 += L4
+                for i,item in enumerate([L1,L2,L3,L4]):
+                    total_loss[i][0]+=item[0]
+                    total_loss[i][1]+=item[1]
                 #print(f'Test Loss: {loss.item():.6f} | L1: {L1:.6f} | L2: {L2:.6f} | L3: {L3:.6f} | L4: {L4:.6f}')
-                total_loss += (lam[0] * L1 + lam[1] * L2 + lam[2] * L3 + lam[3] * L4)
-        avg_loss = total_loss / len(test_ds)
-        avg_l1 = total_l1 / len(test_ds)
-        avg_l2 = total_l2 / len(test_ds)
-        avg_l3 = total_l3 / len(test_ds)
-        avg_l4 = total_l4 / len(test_ds)
-        return avg_loss, avg_l1, avg_l2, avg_l3, avg_l4
+        return total_loss
     
     @staticmethod
     def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols):
@@ -689,6 +738,7 @@ class TSDiffusion(nn.Module):
         static_features_cols: list,
         predict_state_cols: list,
         timestamp_col: str,
+        status_pred_window: np.float32,
         epochs: int = 10,
         batch_size: int = 32,
         lr: float = 1e-3,
@@ -706,74 +756,70 @@ class TSDiffusion(nn.Module):
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9,0.999),
                                       weight_decay=1e-2)
         self.to(device).train()
-        for epoch in range(1, epochs + 1):
-            total_train = 0.0
-            self.train()
-            for batch in train_loader:
-                if len(batch) == 5:
-                    x, ts_batch, m, p, s = batch
-                else:                               # caso não haja static
-                    x, ts_batch, m, p = batch;  s = None
-                x, ts_batch, m, p = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True), p.to(device, non_blocking = True)
-                if s is not None: s = s.to(device, non_blocking = True)
-                t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
+        total_train = [[0.0, 0.0] for _ in range(4)]
+        self.train()
+        for batch in train_loader:
+            if len(batch) == 5:
+                x, ts_batch, m, p, s = batch
+            else:                               # caso não haja static
+                x, ts_batch, m, p = batch;  s = None
+            x, ts_batch, m, p = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True), p.to(device, non_blocking = True)
+            if s is not None: s = s.to(device, non_blocking = True)
+            t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
 
-                # 2) probabilidade de *extra-missing* cresce com t
-                p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
-                p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
-                rand_mask = (torch.rand_like(m) > p_drop_t).float()
-                m_train   = m * rand_mask
-                x_masked = x * m_train
-                #x_t = torch.sqrt(ab) * x_masked + torch.sqrt(1 - ab) * noise
-                #m_latent = self._make_mask(m_train, self.latent_dim)  # (B,T,latent_dim)
-                #m_model = self._make_mask(m_train, self.model_dim)    # (B,T,model_dim)
-                state, noise, x_hat, tmax  = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, 
-                                                          return_pred_state=True, return_x_hat=True, mask=m_train)
-                # ---------- cabeças ----------
-                loss,_,_,_,_= self._compute_loss(
-                    x, x_hat, tmax, state, ts_batch, m, m_train,noise, p
-                )
-                optimizer.zero_grad(); loss.backward(); optimizer.step()
-                total_train += loss.item() * x.size(0) * batch_size
-            if df_val is not None:
-                total_val = 0.0
-                total_l1 = 0.0
-                total_l2 = 0.0
-                total_l3 = 0.0
-                total_l4 = 0.0
-                self.eval()
-                with torch.no_grad():
-                    for batch in val_loader:
-                        if len(batch) == 5:
-                            x, ts_batch, m, p, s = batch
-                        else:                               # caso não haja static
-                            x, ts_batch, m = batch;  s = None
-                        x, ts_batch, m, p = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True),p.to(device, non_blocking = True)
-                        if s is not None: s = s.to(device, non_blocking = True)
-                        t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
+            # 2) probabilidade de *extra-missing* cresce com t
+            p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
+            p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
+            rand_mask = (torch.rand_like(m) > p_drop_t).float()
+            rand_mask[:, -1, :] = 0.0   # força último timestamp a ser 1 em todos os canais
+            m_train   = m * rand_mask
+            x_masked = x * m_train
+            #x_t = torch.sqrt(ab) * x_masked + torch.sqrt(1 - ab) * noise
+            #m_latent = self._make_mask(m_train, self.latent_dim)  # (B,T,latent_dim)
+            #m_model = self._make_mask(m_train, self.model_dim)    # (B,T,model_dim)
+            state, noise, x_hat, tmax  = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, 
+                                                        return_pred_state=True, return_x_hat=True, mask=m_train)
+            # ---------- cabeças ----------
+            loss,L1,L2,L3,L4= self._compute_loss(
+                x, x_hat, tmax, state, ts_batch, m, m_train,noise, p, status_pred_window
+            )
+            optimizer.zero_grad(); loss.backward(); optimizer.step()
+            for i,item in enumerate([L1,L2,L3,L4]):
+                total_train[i][0]+=item[0]
+                total_train[i][1]+=item[1]
+        
 
-                        # 2) probabilidade de *extra-missing* cresce com t
-                        p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
-                        p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
-                        rand_mask = (torch.rand_like(m) > p_drop_t).float()
-                        m_val   = m * rand_mask
-                        x_masked = x * m_val
-                        state , noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, mask=m_val, return_x_hat=True, return_pred_state=True)
-                        loss, L1, L2, L3, L4 = self._compute_loss(
-                            x, x_hat, tmax,state, ts_batch, m, mask_train=m_val, noise=noise, state_pred=p
-                        )
-                        total_val += (lam[0]*L1 + lam[1]*L2 + lam[2]*L3 + lam[3]*L4)
-                        total_l1 += L1
-                        total_l2 += L2
-                        total_l3 += L3
-                        total_l4 += L4
-                if verbose:
-                    print(f"Epoch {epoch}/{epochs} — Train Loss: {total_train/len(train_ds):.6f} — Val Loss: {total_val/len(val_ds):.6f}")
-                else: 
-                    self.loss = total_train / len(train_ds)
-                    self.val_loss = total_val / len(val_ds)
-        print(f"Ep {epoch}: L1={total_l1/len(val_ds):.2f} L2={total_l2/len(val_ds):.2f} "
-    f"L3={total_l3/len(val_ds):.2f} L4={total_l4/len(val_ds):.2f}")
+
+        if df_val is not None:
+            total_val = [[0.0, 0.0] for _ in range(4)]
+            self.eval()
+            with torch.no_grad():
+                for batch in val_loader:
+                    if len(batch) == 5:
+                        x, ts_batch, m, p, s = batch
+                    else:                               # caso não haja static
+                        x, ts_batch, m = batch;  s = None
+                    x, ts_batch, m, p = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True),p.to(device, non_blocking = True)
+                    if s is not None: s = s.to(device, non_blocking = True)
+                    t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
+
+                    # 2) probabilidade de *extra-missing* cresce com t
+                    p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
+                    p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
+                    rand_mask = (torch.rand_like(m) > p_drop_t).float()
+                    m_val   = m * rand_mask
+                    x_masked = x * m_val
+                    state , noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, mask=m_val, return_x_hat=True, return_pred_state=True)
+                    loss, L1, L2, L3, L4 = self._compute_loss(
+                        x, x_hat, tmax,state, ts_batch, m, mask_train=m_val, noise=noise, state_pred=p, status_pred_window=status_pred_window
+                    )
+                    
+                    for i,item in enumerate([L1,L2,L3,L4]):
+                        total_val[i][0]+=item[0]
+                        total_val[i][1]+=item[1]
+
+        return total_train,total_val
+
 
     def _make_mask(self, m, dim):
         if dim % self.in_channels == 0:
