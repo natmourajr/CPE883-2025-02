@@ -230,6 +230,8 @@ class TSDiffusion(nn.Module):
         )
         # predição do ruído introjetado no estado
         self.noise_head = nn.Linear(hidden_dim,hidden_dim)
+        nn.init.zeros_(self.noise_head.weight)
+        nn.init.zeros_(self.noise_head.bias)
         # (c) μ_Tmax  — previsão do horizonte da série
         self.tmax_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -489,7 +491,10 @@ class TSDiffusion(nn.Module):
                             lr=lr,
                             window_size=window_size,
                             device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                        )              
+                        )  
+                        for idx in range(4):
+                            train_loss_dataset[idx][0]+=results[0][idx][0]
+                            train_loss_dataset[idx][1]+=results[0][idx][1]            
                         train_loss = [item[0]/item[1] for item in train_loss_dataset]
                         train_loss_total = sum([item*lam[idx] for idx,item in enumerate(train_loss)])       
                         print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])}' +
@@ -567,11 +572,11 @@ class TSDiffusion(nn.Module):
         err_change = err * changing_state
         sse_tmax_no_change = (err_no_change**2).sum(dim=-1)              # (B,T)  soma sobre S
         sse_tmax_change = (err_change**2).sum(dim=-1)*1000
-        S = changing_state.sum(dim=-1) * 1000 + (1-changing_state).sum(dim=-1)
+        S_bt = torch.full_like(lam2_tmax, float(err.size(-1)))   # (B,T)
         log_ptmax = (
             - 0.5 * lam2_tmax * (sse_tmax_no_change+sse_tmax_change)
-            + 0.5 * S * torch.log(lam2_tmax + 1e-8)
-            - 0.5 * S * math.log(2 * math.pi)
+            + 0.5 * S_bt * torch.log(lam2_tmax + 1e-8)
+            - 0.5 * S_bt * math.log(2 * math.pi)
         )                                       # (B,T)
 
         # Média por timestep (B,T). Se preferir, some e divida por B*T explicitamente.
@@ -586,9 +591,9 @@ class TSDiffusion(nn.Module):
         #    loss = L2
         #else:
         L1_div = nobs.sum().clamp(min=1.0)
-        L2_div = float(state.size(0)*state.size(1)*state.size(2))
-        L3_div = S.sum().clamp(min=1.0)
-        L4_div = float(mb_pred.size(0)*mb_pred.size(1)*mb_pred.size(2))
+        L2_div = float(state.numel())
+        L3_div = float(err.numel())
+        L4_div = float(mb_pred.numel())
 
 
         loss = lam[0]*L1/L1_div + lam[1]*L2/L2_div + lam[2]*L3/L3_div + lam[3]*L4/L4_div
@@ -596,7 +601,7 @@ class TSDiffusion(nn.Module):
         return (loss,
                 (float(L1.item()), float(L1_div.item())),
                 (float(L2.item()), float(L2_div)),
-                (float(L3.item()), float(L3_div.item())),
+                (float(L3.item()), float(L3_div)),
                 (float(L4.item()), float(L4_div)))
     
     def test_model(
@@ -614,8 +619,9 @@ class TSDiffusion(nn.Module):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         test_ds = self._make_dataset(df_test, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
         test_loader = DataLoader(test_ds, batch_size=batch_size)
-        self.eval()
         total_loss = [[0.0, 0.0] for _ in range(4)]
+        self.to(device)
+        self.eval()
         with torch.no_grad():
             for batch in test_loader:
                 if len(batch) == 5:
@@ -630,10 +636,9 @@ class TSDiffusion(nn.Module):
                 p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
                 p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
                 rand_mask = (torch.rand_like(m) > p_drop_t).float()
+                rand_mask[:, -1, :] = 0.0   # força último timestamp a ser 0 em todos os canais
                 m_test   = m * rand_mask
                 x_masked = x * m_test
-                noise = torch.randn_like(x)
-                #x_t = torch.sqrt(ab) * x + torch.sqrt(1 - ab) * noise
                 state, noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_x_hat=True, 
                                                          return_pred_state=True, mask=m_test)
                 loss, L1, L2, L3, L4 = self._compute_loss(
@@ -781,8 +786,8 @@ class TSDiffusion(nn.Module):
         
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9,0.999),
                                       weight_decay=1e-2)
-        self.to(device).train()
         total_train = [[0.0, 0.0] for _ in range(4)]
+        self.to(device)
         self.train()
         for batch in train_loader:
             if len(batch) == 5:
@@ -797,7 +802,7 @@ class TSDiffusion(nn.Module):
             p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
             p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
             rand_mask = (torch.rand_like(m) > p_drop_t).float()
-            rand_mask[:, -1, :] = 0.0   # força último timestamp a ser 1 em todos os canais
+            rand_mask[:, -1, :] = 0.0   # força último timestamp a ser 0 em todos os canais
             m_train   = m * rand_mask
             x_masked = x * m_train
             #x_t = torch.sqrt(ab) * x_masked + torch.sqrt(1 - ab) * noise
@@ -824,7 +829,7 @@ class TSDiffusion(nn.Module):
                     if len(batch) == 5:
                         x, ts_batch, m, p, s = batch
                     else:                               # caso não haja static
-                        x, ts_batch, m = batch;  s = None
+                        x, ts_batch, m, p = batch;  s = None
                     x, ts_batch, m, p = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True),p.to(device, non_blocking = True)
                     if s is not None: s = s.to(device, non_blocking = True)
                     t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
