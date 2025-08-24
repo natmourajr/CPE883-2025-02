@@ -402,13 +402,39 @@ class TSDiffusion(nn.Module):
             validate: bool = True,
             early_stopping: bool = True,
             patience: int = 5,
-            status_pred_window: int = 600
+            status_pred_window: int = 600,
+            first_train: bool = True
             ):
-        lower_loss = float('inf')
+        
         test_patience = patience
         loader = Loader3W()
         loader.load_stats('./stats.pkl')
         delta_pred_window = np.float32(status_pred_window / TS_SPAN)
+
+        if first_train:
+            lower_loss = float('inf')
+        else:
+            print('Testing model...')
+            test = pd.DataFrame()
+            datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
+            for num_dataset, dataset in enumerate(datasets):
+                if num_dataset >= len(loader.stats['ids']) - test_datasets:
+                    test = pd.concat([test, dataset], ignore_index=True)
+            test_loss = self.test_model(
+                df_test=test,
+                feature_cols=feature_cols,
+                predict_state_cols=predict_state_cols,
+                static_features_cols=static_features_cols,
+                status_pred_window=delta_pred_window,
+                timestamp_col='index',
+                window_size=window_size,
+                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            )
+            test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
+            test_loss_total = sum([item*lam[i] for i,item in enumerate(test_loss)])
+            lower_loss = test_loss_total
+            print(f'Test completed - Test Loss: {test_loss_total:.6f}')
+            print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')                   
         for i in range(1, epochs+1):
             print(f'Starting epoch {i}/{epochs}')
             test = pd.DataFrame()
@@ -431,12 +457,10 @@ class TSDiffusion(nn.Module):
                                 predict_state_cols=predict_state_cols,
                                 timestamp_col='index',
                                 status_pred_window=delta_pred_window,
-                                epochs=1,
                                 batch_size=batch_size,
                                 lr=lr,
                                 window_size=window_size,
-                                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-                                verbose=False
+                                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                             )
                             for idx in range(4):
                                 train_loss_dataset[idx][0]+=results[0][idx][0]
@@ -461,15 +485,17 @@ class TSDiffusion(nn.Module):
                             predict_state_cols=predict_state_cols,
                             timestamp_col='index',
                             status_pred_window=delta_pred_window,
-                            epochs=1,
                             batch_size=batch_size,
                             lr=lr,
                             window_size=window_size,
-                            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-                            verbose=False
+                            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                         )              
-      
-    
+                        train_loss = [item[0]/item[1] for item in train_loss_dataset]
+                        train_loss_total = sum([item*lam[idx] for idx,item in enumerate(train_loss)])       
+                        print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])}' +
+                                f'- Loss - Train: {train_loss_total:.6f}')
+                        print(f'(Train) L1:{train_loss[0]:.6f}, L2: {train_loss[1]:.6f}, ' +
+                            f'L3: {train_loss[2]:.6f}, L4: {train_loss[3]:.6f}')      
                 else:
                     test = pd.concat([test, dataset], ignore_index=True)
 
@@ -486,9 +512,9 @@ class TSDiffusion(nn.Module):
             )
             test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
             test_loss_total = sum([item*lam[i] for i,item in enumerate(test_loss)])
-            if early_stopping and test_loss[0] < lower_loss:
+            if early_stopping and test_loss_total < lower_loss:
                 self.save(f'ts_diffusion.pt')
-                lower_loss = test_loss[0]
+                lower_loss = test_loss_total
                 test_patience = patience
             else:
                 test_patience -= 1
@@ -518,10 +544,10 @@ class TSDiffusion(nn.Module):
         mask_err = mask * (1 - mask_train) # erro ao longo dos C canais observados 
         sse = ((x - x_hat)**2 * mask_err).sum(dim=-1) # (B,T) 
         nobs = mask_err.sum(dim=-1).clamp(min=1e-8) # -½ λ ||x-μ||^2 + ½ log λ 
-        valid = (nobs > 0).float()   
+        #valid = (nobs > 0).float()   
         log_px = -0.5 * (lam2 * sse) + 0.5 * nobs * torch.log(lam2 + 1e-8) - 0.5 * nobs * math.log(2*math.pi) # (B,T) 
         # Se quiser normalizar para não depender de C/T, use média por observação: # loss por (B,T) normalizada por nobs: 
-        neg_log_px = -(log_px *valid) # (B,T) 
+        neg_log_px = -(log_px) # (B,T) 
         L1 = neg_log_px.sum() # escalar
         
         # Perda do ruído
@@ -543,8 +569,7 @@ class TSDiffusion(nn.Module):
         sse_tmax_change = (err_change**2).sum(dim=-1)*1000
         S = changing_state.sum(dim=-1) * 1000 + (1-changing_state).sum(dim=-1)
         log_ptmax = (
-            - 0.5 * lam2_tmax * sse_tmax_no_change
-            - 0.5 * lam2_tmax * sse_tmax_change
+            - 0.5 * lam2_tmax * (sse_tmax_no_change+sse_tmax_change)
             + 0.5 * S * torch.log(lam2_tmax + 1e-8)
             - 0.5 * S * math.log(2 * math.pi)
         )                                       # (B,T)
@@ -560,7 +585,7 @@ class TSDiffusion(nn.Module):
         #if L2.item()>0.3:
         #    loss = L2
         #else:
-        L1_div = (nobs*valid).sum().clamp(min=1.0)
+        L1_div = nobs.sum().clamp(min=1.0)
         L2_div = float(state.size(0)*state.size(1)*state.size(2))
         L3_div = S.sum().clamp(min=1.0)
         L4_div = float(mb_pred.size(0)*mb_pred.size(1)*mb_pred.size(2))
@@ -739,20 +764,21 @@ class TSDiffusion(nn.Module):
         predict_state_cols: list,
         timestamp_col: str,
         status_pred_window: np.float32,
-        epochs: int = 10,
         batch_size: int = 32,
         lr: float = 1e-3,
         window_size: int = None,
-        device: torch.device = None,
-        verbose: bool = True,
+        device: torch.device = None
 
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols,predict_state_cols)
-        val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size=batch_size) if df_val is not None else None
+        if df_val:
+            val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
+            val_loader = DataLoader(val_ds, batch_size=batch_size) if df_val is not None else None
+        
+        
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9,0.999),
                                       weight_decay=1e-2)
         self.to(device).train()
@@ -818,7 +844,9 @@ class TSDiffusion(nn.Module):
                         total_val[i][0]+=item[0]
                         total_val[i][1]+=item[1]
 
-        return total_train,total_val
+            return total_train,total_val
+        else:
+            return total_train,None
 
 
     def _make_mask(self, m, dim):
