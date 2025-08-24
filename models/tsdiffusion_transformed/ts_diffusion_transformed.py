@@ -13,7 +13,6 @@ import math
 t0 = 1735689600.0    
 max_drop = 0.7
 TS_SPAN = 60 * 60 * 24 * 365
-lam = [0.3, 0.3, 0.3, 0.1] #Diferente do artigo para convergir mais rápido.
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
 if os.environ.get('path3WLoader'): sys.path.append(os.environ.get('path3WLoader'))
 from loader import Loader3W
@@ -190,8 +189,10 @@ class TSDiffusion(nn.Module):
         n_heads: int = 4,
         n_layers: int = 4,
         static_dim: int = 0,
+        lam: list[float,float,float,float] = [0.4, 0.4, 0.1, 0.1]
         
     ):
+        self.lam = lam
         super().__init__()
         self.val_loss = float('inf')
         self.model_dim = hidden_dim
@@ -433,7 +434,7 @@ class TSDiffusion(nn.Module):
                 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             )
             test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
-            test_loss_total = sum([item*lam[i] for i,item in enumerate(test_loss)])
+            test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             lower_loss = test_loss_total
             print(f'Test completed - Test Loss: {test_loss_total:.6f}')
             print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')                   
@@ -470,9 +471,9 @@ class TSDiffusion(nn.Module):
                                 val_loss_dataset[idx][0]+=results[1][idx][0]
                                 val_loss_dataset[idx][1]+=results[1][idx][1]
                             train_loss = [item[0]/item[1] for item in train_loss_dataset]
-                            train_loss_total = sum([item*lam[idx] for idx,item in enumerate(train_loss)]) 
+                            train_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(train_loss)]) 
                             val_loss = [item[0]/item[1] for item in val_loss_dataset]
-                            val_loss_total = sum([item*lam[idx] for idx,item in enumerate(val_loss)]) 
+                            val_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(val_loss)]) 
                             print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])} - Parcial {partial_split}/5' +
                                   f'- Loss - Train: {train_loss_total:.6f} Val: {val_loss_total:.6f}')
                             print(f'(Train/Val) L1:{train_loss[0]:.6f}/{val_loss[0]:.6f}, L2: {train_loss[1]:.6f}/{val_loss[1]:.6f}, ' +
@@ -496,7 +497,7 @@ class TSDiffusion(nn.Module):
                             train_loss_dataset[idx][0]+=results[0][idx][0]
                             train_loss_dataset[idx][1]+=results[0][idx][1]            
                         train_loss = [item[0]/item[1] for item in train_loss_dataset]
-                        train_loss_total = sum([item*lam[idx] for idx,item in enumerate(train_loss)])       
+                        train_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(train_loss)])       
                         print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])}' +
                                 f'- Loss - Train: {train_loss_total:.6f}')
                         print(f'(Train) L1:{train_loss[0]:.6f}, L2: {train_loss[1]:.6f}, ' +
@@ -516,7 +517,7 @@ class TSDiffusion(nn.Module):
                 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             )
             test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
-            test_loss_total = sum([item*lam[i] for i,item in enumerate(test_loss)])
+            test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             if early_stopping and test_loss_total < lower_loss:
                 self.save(f'ts_diffusion.pt')
                 lower_loss = test_loss_total
@@ -560,6 +561,7 @@ class TSDiffusion(nn.Module):
                           # (B,T,S)
         lam_t_tmax = F.softplus(self.lambda_tmax_head(state)).clamp(min=1e-8, max=1e8)  # (B,T,1)
         lam2_tmax  = lam_t_tmax.squeeze(-1)                                            # (B,T)
+        lam2_tmax_clamped = lam2_tmax.clamp(min=0.1)  # novo tensor, sem in-place
         offset_state_pred = (state_pred - ts_batch.unsqueeze(-1)).clamp(min=0)
         offset_tmax = (tmax - ts_batch.unsqueeze(-1)).clamp(min=0)  
         changing_state = (offset_state_pred>0).float()
@@ -574,8 +576,9 @@ class TSDiffusion(nn.Module):
         sse_tmax_change = (err_change**2).sum(dim=-1)*1000
         S_bt = torch.full_like(lam2_tmax, float(err.size(-1)))   # (B,T)
         log_ptmax = (
-            - 0.5 * lam2_tmax * (sse_tmax_no_change+sse_tmax_change)
-            + 0.5 * S_bt * torch.log(lam2_tmax + 1e-8)
+            - 0.5 * lam2_tmax * sse_tmax_no_change
+            - 0.5 * lam2_tmax_clamped * sse_tmax_change
+            + 0.5 * S_bt * torch.log(lam2_tmax_clamped + 1e-8)
             - 0.5 * S_bt * math.log(2 * math.pi)
         )                                       # (B,T)
 
@@ -596,7 +599,7 @@ class TSDiffusion(nn.Module):
         L4_div = float(mb_pred.numel())
 
 
-        loss = lam[0]*L1/L1_div + lam[1]*L2/L2_div + lam[2]*L3/L3_div + lam[3]*L4/L4_div
+        loss = self.lam[0]*L1/L1_div + self.lam[1]*L2/L2_div + self.lam[2]*L3/L3_div + self.lam[3]*L4/L4_div
 
         return (loss,
                 (float(L1.item()), float(L1_div.item())),
