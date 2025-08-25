@@ -175,6 +175,74 @@ class DiffTimeEmbedding(nn.Module):
         emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
         # projeta de volta ao espaço de dimensão model_dim
         return self.lin(emb)
+
+class TimeHybridEncoding(nn.Module):
+    """
+    Odd dims  -> ramp(t) = a*t + b   (aprendido)
+    Even dims -> sinusoidal [sin, cos] com frequências log-espalhadas
+    Usa timestamps normalizados globalmente: (ts - t0)/TS_SPAN
+    """
+    def __init__(self, d_model: int,
+                 min_period: float = 4.0,
+                 max_period: float = 10_000.0,
+                 ramp_gain: float = 1.0):
+        super().__init__()
+        self.d_model = d_model
+
+        # Máscaras pares/ímpares
+        even_idx = torch.arange(d_model) % 2 == 0
+        odd_idx  = ~even_idx
+        self.register_buffer("even_mask", even_idx, persistent=False)
+        self.register_buffer("odd_mask",  odd_idx,  persistent=False)
+
+        self.n_even = int(even_idx.sum().item())
+        self.n_odd  = int(odd_idx.sum().item())
+
+        # --- Ramp nos ímpares ---
+        self.a = nn.Parameter(torch.zeros(self.n_odd, dtype=torch.float32))
+        self.b = nn.Parameter(torch.zeros(self.n_odd, dtype=torch.float32))
+        if ramp_gain != 1.0:
+            with torch.no_grad():
+                self.a.mul_(ramp_gain)
+
+        # --- Sin/cos nos pares ---
+        self.n_freq = max(self.n_even // 2, 0)
+        if self.n_freq > 0:
+            freqs = torch.exp(
+                -torch.linspace(0, math.log(max_period/min_period), self.n_freq, dtype=torch.float32)
+            ) * (2.0 * math.pi / min_period)
+            self.register_buffer("freqs", freqs, persistent=False)
+        else:
+            self.register_buffer("freqs", torch.empty(0, dtype=torch.float32), persistent=False)
+
+    def forward(self, ts: torch.Tensor) -> torch.Tensor:
+        """
+        ts: (B,T) — timestamps já normalizados: (ts - t0)/TS_SPAN
+        retorna: (B,T,D)
+        """
+        B, T = ts.shape
+        device, dtype = ts.device, ts.dtype
+        out = torch.zeros(B, T, self.d_model, device=device, dtype=ts.dtype)
+
+        # ----- RAMP nas dims ímpares -----
+        if self.n_odd > 0:
+            ramp = ts.unsqueeze(-1) * self.a.view(1,1,-1) + self.b.view(1,1,-1)  # (B,T,n_odd)
+            odd_positions = self.odd_mask.nonzero(as_tuple=False).squeeze(-1)
+            out.index_copy_(dim=2, index=odd_positions, source=ramp)
+
+        # ----- SIN/COS nas dims pares -----
+        if self.n_even > 0 and self.n_freq > 0:
+            even_positions = self.even_mask.nonzero(as_tuple=False).squeeze(-1)
+            phase = ts.unsqueeze(-1) * self.freqs.view(1,1,-1)   # (B,T,n_freq)
+            S = torch.sin(phase)
+            C = torch.cos(phase)
+            sc = torch.stack([S, C], dim=-1).reshape(B, T, -1)  # (B,T,2*n_freq)
+            n_fill = min(sc.size(-1), self.n_even)
+            out[:, :, even_positions[:n_fill]] = sc[:, :, :n_fill]
+
+        return out
+
+
 class TSDiffusion(nn.Module):
     """
     TS-Diffusion com forward, sample e impute alinhados ao train_model.
@@ -208,8 +276,6 @@ class TSDiffusion(nn.Module):
             nn.Linear(hidden_dim, in_channels),
         )
         # Projeções
-        self.pos_enc = Time2Vec()
-        self.pos_proj = nn.Linear(4, hidden_dim)
         self.t_embed = DiffTimeEmbedding(hidden_dim)
         self.static_dim = static_dim
         if static_dim > 0:
@@ -239,6 +305,8 @@ class TSDiffusion(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, status_dim)
         )
+        
+        self.time_encoding = TimeHybridEncoding(hidden_dim)
         self.encoder_ode = JumpODEEncoder(hidden_dim, hidden_dim, attn_heads=n_heads, num_layers=n_layers)
         # (d) m_b  — probabilidade de observação (Bernoulli) para L4
         self.miss_head = nn.Linear(self.model_dim, 1)
@@ -283,14 +351,9 @@ class TSDiffusion(nn.Module):
         if timestamps is None:
             raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
         te = self.t_embed(t).unsqueeze(1)          # (b,1,model_dim)
-        h = h + te
+        tm_e = self.time_encoding(timestamps.to(h.dtype)).to(h.dtype)  # tempo contínuo
+        h = h + te + tm_e
         h = self.encoder_ode(h, timestamps)   # (B,T,model_dim)
-
-        # Transformer
-        #h = h.permute(1, 0, 2)  # (seq_len, b, model_dim)
-        #h = self.transformer(h)
-        #h = h.permute(1, 0, 2)  # (b, seq_len, model_dim)
-        # Previsão de ruído
         state = h
         return state, noise, self.decoder(state) if return_x_hat else None, self.tmax_head(state) if return_pred_state else None
 
@@ -322,7 +385,7 @@ class TSDiffusion(nn.Module):
             if i > 0:
                 z = z + torch.sqrt(self.beta[i]) * torch.randn_like(z)
 
-        x_hat = self.decoder(state) * (1 - mask) + x_obs * mask
+        x_hat = self.decoder(state)
         return x_hat
 
             #gamma = 0.1                                   # 0<γ≤1
@@ -545,13 +608,13 @@ class TSDiffusion(nn.Module):
         status_pred_window: np.float32
     ):
 # ---------- L1: log-likelihood Gaussiano ponderado por λ ---------- # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação 
-        lam_t = F.softplus(self.lambda_head(state)).clamp(max=1e+8) # (B,T,1) 
+        lam_t = F.softplus(self.lambda_head(state)).clamp(min=1e-8,max=1e+8) # (B,T,1) 
         lam2 = lam_t.squeeze(-1) # (B,T) 
         mask_err = mask * (1 - mask_train) # erro ao longo dos C canais observados 
         sse = ((x - x_hat)**2 * mask_err).sum(dim=-1) # (B,T) 
         nobs = mask_err.sum(dim=-1).clamp(min=1e-8) # -½ λ ||x-μ||^2 + ½ log λ 
         #valid = (nobs > 0).float()   
-        log_px = -0.5 * (lam2 * sse) + 0.5 * nobs * torch.log(lam2 + 1e-8) - 0.5 * nobs * math.log(2*math.pi) # (B,T) 
+        log_px = -0.5 * (lam2 * sse) + 0.5 * nobs * torch.log(lam2) - 0.5 * nobs * math.log(2*math.pi) # (B,T) 
         # Se quiser normalizar para não depender de C/T, use média por observação: # loss por (B,T) normalizada por nobs: 
         neg_log_px = -(log_px) # (B,T) 
         L1 = neg_log_px.sum() # escalar
@@ -578,7 +641,7 @@ class TSDiffusion(nn.Module):
         log_ptmax = (
             - 0.5 * lam2_tmax * sse_tmax_no_change
             - 0.5 * lam2_tmax_clamped * sse_tmax_change
-            + 0.5 * S_bt * torch.log(lam2_tmax_clamped + 1e-8)
+            + 0.5 * S_bt * torch.log(lam2_tmax_clamped)
             - 0.5 * S_bt * math.log(2 * math.pi)
         )                                       # (B,T)
 
@@ -598,8 +661,11 @@ class TSDiffusion(nn.Module):
         L3_div = float(err.numel())
         L4_div = float(mb_pred.numel())
 
-
-        loss = self.lam[0]*L1/L1_div + self.lam[1]*L2/L2_div + self.lam[2]*L3/L3_div + self.lam[3]*L4/L4_div
+        L2_result = self.lam[1]*L2/L2_div
+        if  L2_result.item() > 0.2:
+            loss = L2_result
+        else:
+            loss = self.lam[0]*L1/L1_div + self.lam[1]*L2/L2_div + self.lam[2]*L3/L3_div + self.lam[3]*L4/L4_div
 
         return (loss,
                 (float(L1.item()), float(L1_div.item())),
@@ -782,7 +848,7 @@ class TSDiffusion(nn.Module):
 
         train_ds = self._make_dataset(df_train, timestamp_col, window_size, feature_cols, static_features_cols,predict_state_cols)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-        if df_val:
+        if df_val is not None:
             val_ds = self._make_dataset(df_val, timestamp_col, window_size, feature_cols, static_features_cols, predict_state_cols)
             val_loader = DataLoader(val_ds, batch_size=batch_size) if df_val is not None else None
         
