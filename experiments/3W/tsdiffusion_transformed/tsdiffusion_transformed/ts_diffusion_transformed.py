@@ -9,8 +9,7 @@ import os
 import numpy as np
 import math
 # --- cole na classe TSDiffusion -------------------------------------------
-
-t0 = 1735689600.0    
+#torch.set_float32_matmul_precision("high")     
 max_drop = 0.7
 TS_SPAN = 60 * 60 * 24 * 365
 sys.path.append(f'{os.environ.get("path3W","../../../")}'+'3W')
@@ -305,7 +304,10 @@ class TSDiffusion(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim // 2, status_dim)
         )
-        
+        self.t_film = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(self.model_dim, 2*self.model_dim)  # gamma, beta
+        )        
         self.time_encoding = TimeHybridEncoding(hidden_dim)
         self.encoder_ode = JumpODEEncoder(hidden_dim, hidden_dim, attn_heads=n_heads, num_layers=n_layers)
         # (d) m_b  — probabilidade de observação (Bernoulli) para L4
@@ -352,6 +354,9 @@ class TSDiffusion(nn.Module):
             raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
         te = self.t_embed(t).unsqueeze(1)          # (b,1,model_dim)
         tm_e = self.time_encoding(timestamps.to(h.dtype)).to(h.dtype)  # tempo contínuo
+        gb = self.t_film(te)                       # (B,1,2D)
+        gamma, beta = gb.chunk(2, dim=-1)          # (B,1,D), (B,1,D)
+        tm_e = (1.0 + gamma) * tm_e + beta         # FiLM no tempo contínuo
         h = h + te + tm_e
         h = self.encoder_ode(h, timestamps)   # (B,T,model_dim)
         state = h
@@ -433,28 +438,35 @@ class TSDiffusion(nn.Module):
             predict_state_cols: list = [f'state-pred-{s}' for s in range(10)],
             batch_size: int = 32,
             test_datasets: int = 2,
-            status_pred_window: int = 600
+            status_pred_window: int = 600,
+            mse: bool = False
             ):
         loader = Loader3W()
         loader.load_stats('./stats.pkl')
-        test = pd.DataFrame()
+        delta_pred_window = np.float32(status_pred_window / TS_SPAN)
+        test_loss_dataset = [[0.0,0.0] for _ in range(4)]
         datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
         for num_dataset, dataset in enumerate(datasets):
             if num_dataset >= len(loader.stats['ids']) - test_datasets:
-                test = pd.concat([test, dataset], ignore_index=True)
+                results = self.test_model(
+                    df_test=dataset,
+                    feature_cols=feature_cols,
+                    predict_state_cols=predict_state_cols,
+                    static_features_cols=static_features_cols,
+                    timestamp_col='index',
+                    window_size=window_size,
+                    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+                    status_pred_window=delta_pred_window,
+                    mse=mse
+                )
+                for idx in range(4):
+                    test_loss_dataset[idx][0]+=results[idx][0]
+                    test_loss_dataset[idx][1]+=results[idx][1]
 
-        test_loss = self.test_model(
-            df_test=test,
-            feature_cols=feature_cols,
-            predict_state_cols=predict_state_cols,
-            static_features_cols=static_features_cols,
-            timestamp_col='index',
-            window_size=window_size,
-            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        )
-        print(f'Test Loss: {test_loss[0]:.6f}')
-        print(f'Test L1: {test_loss[1]:.6f}, Test L2: {test_loss[2]:.6f}, Test L3: {test_loss[3]:.6f}, Test L4: {test_loss[4]:.6f}')
-
+        test_loss = [item[0]/item[1] for item in test_loss_dataset]
+        test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
+        print(f'Test completed - Test Loss: {test_loss_total:.6f}')
+        print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')  
     def train3W(
             self, 
             window_size: int = 600, 
@@ -483,27 +495,30 @@ class TSDiffusion(nn.Module):
             print('Testing model...')
             test = pd.DataFrame()
             datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
+            test_loss_dataset = [[0.0,0.0] for _ in range(4)]
             for num_dataset, dataset in enumerate(datasets):
                 if num_dataset >= len(loader.stats['ids']) - test_datasets:
-                    test = pd.concat([test, dataset], ignore_index=True)
-            test_loss = self.test_model(
-                df_test=test,
-                feature_cols=feature_cols,
-                predict_state_cols=predict_state_cols,
-                static_features_cols=static_features_cols,
-                status_pred_window=delta_pred_window,
-                timestamp_col='index',
-                window_size=window_size,
-                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            )
-            test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
+                    results = self.test_model(
+                        df_test=dataset,
+                        feature_cols=feature_cols,
+                        predict_state_cols=predict_state_cols,
+                        static_features_cols=static_features_cols,
+                        status_pred_window=delta_pred_window,
+                        timestamp_col='index',
+                        window_size=window_size,
+                        device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                    )
+                    for idx in range(4):
+                        test_loss_dataset[idx][0]+=results[idx][0]
+                        test_loss_dataset[idx][1]+=results[idx][1]
+            test_loss = [item[0]/item[1] for item in test_loss_dataset]
             test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             lower_loss = test_loss_total
             print(f'Test completed - Test Loss: {test_loss_total:.6f}')
             print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')                   
         for i in range(1, epochs+1):
             print(f'Starting epoch {i}/{epochs}')
-            test = pd.DataFrame()
+            test_loss_dataset = [[0.0,0.0] for _ in range(4)]
             datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
             for num_dataset, dataset in enumerate(datasets):
                 if num_dataset < len(loader.stats['ids']) - test_datasets:
@@ -566,20 +581,20 @@ class TSDiffusion(nn.Module):
                         print(f'(Train) L1:{train_loss[0]:.6f}, L2: {train_loss[1]:.6f}, ' +
                             f'L3: {train_loss[2]:.6f}, L4: {train_loss[3]:.6f}')      
                 else:
-                    test = pd.concat([test, dataset], ignore_index=True)
-
-
-            test_loss = self.test_model(
-                df_test=test,
-                feature_cols=feature_cols,
-                predict_state_cols=predict_state_cols,
-                static_features_cols=static_features_cols,
-                status_pred_window=delta_pred_window,
-                timestamp_col='index',
-                window_size=window_size,
-                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            )
-            test_loss = [item[0]/item[1] for i,item in enumerate(test_loss)]
+                    results = self.test_model(
+                        df_test=dataset,
+                        feature_cols=feature_cols,
+                        predict_state_cols=predict_state_cols,
+                        static_features_cols=static_features_cols,
+                        status_pred_window=delta_pred_window,
+                        timestamp_col='index',
+                        window_size=window_size,
+                        device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                    )
+                    for idx in range(4):
+                        test_loss_dataset[idx][0]+=results[idx][0]
+                        test_loss_dataset[idx][1]+=results[idx][1]  
+            test_loss = [item[0]/item[1] for item in test_loss_dataset]
             test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             if early_stopping and test_loss_total < lower_loss:
                 self.save(f'ts_diffusion.pt')
@@ -605,48 +620,54 @@ class TSDiffusion(nn.Module):
         mask_train: torch.Tensor,
         noise: torch.Tensor,
         state_pred: torch.Tensor,
-        status_pred_window: np.float32
+        status_pred_window: np.float32,
+        mse: bool = False
     ):
-# ---------- L1: log-likelihood Gaussiano ponderado por λ ---------- # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação 
-        lam_t = F.softplus(self.lambda_head(state)).clamp(min=1e-8,max=1e+8) # (B,T,1) 
-        lam2 = lam_t.squeeze(-1) # (B,T) 
+        #L1
         mask_err = mask * (1 - mask_train) # erro ao longo dos C canais observados 
         sse = ((x - x_hat)**2 * mask_err).sum(dim=-1) # (B,T) 
-        nobs = mask_err.sum(dim=-1).clamp(min=1e-8) # -½ λ ||x-μ||^2 + ½ log λ 
-        #valid = (nobs > 0).float()   
-        log_px = -0.5 * (lam2 * sse) + 0.5 * nobs * torch.log(lam2) - 0.5 * nobs * math.log(2*math.pi) # (B,T) 
-        # Se quiser normalizar para não depender de C/T, use média por observação: # loss por (B,T) normalizada por nobs: 
-        neg_log_px = -(log_px) # (B,T) 
-        L1 = neg_log_px.sum() # escalar
-        
+        nobs = mask_err.sum(dim=-1).clamp(min=1e-8) # -½ λ ||x-μ||^2 + ½ log λ
+        #L3
+        offset_state_pred = (state_pred - ts_batch.unsqueeze(-1)).clamp(min=0,max=status_pred_window)
+        offset_tmax = (tmax - ts_batch.unsqueeze(-1)).clamp(min=0,max=status_pred_window) 
+        changing_state = (offset_state_pred>0).float()
+        err = (offset_tmax - offset_state_pred) / status_pred_window   # (B,T,S)
+        if not mse:
+# ---------- L1: log-likelihood Gaussiano ponderado por λ ---------- # λ(t) em (B,T,1) -> espreme p/ (B,T) e usa .unsqueeze(-1) na multiplicação 
+            lam_t = F.softplus(self.lambda_head(state)).clamp(min=1e-8,max=1e+8) # (B,T,1) 
+            lam2 = lam_t.squeeze(-1) # (B,T) 
+
+            #valid = (nobs > 0).float()   
+            log_px = -0.5 * (lam2 * sse) + 0.5 * nobs * torch.log(lam2) - 0.5 * nobs * math.log(2*math.pi) # (B,T) 
+            # Se quiser normalizar para não depender de C/T, use média por observação: # loss por (B,T) normalizada por nobs: 
+            neg_log_px = -(log_px) # (B,T) 
+            L1 = neg_log_px.sum() # escalar
+            lam_t_tmax = F.softplus(self.lambda_tmax_head(state)).clamp(min=1e-8, max=1e8)  # (B,T,1)
+            lam2_tmax  = lam_t_tmax.squeeze(-1)                                            # (B,T)
+            lam2_tmax_clamped = lam2_tmax.clamp(min=0.1)  # novo tensor, sem in-place
+            err_no_change = err * (1-changing_state)
+            err_change = err * changing_state
+            sse_tmax_no_change = (err_no_change**2).sum(dim=-1)              # (B,T)  soma sobre S
+            sse_tmax_change = (err_change**2).sum(dim=-1)*1000
+            S_bt = torch.full_like(lam2_tmax, float(err.size(-1)))   # (B,T)
+            log_ptmax = (
+                - 0.5 * lam2_tmax * sse_tmax_no_change
+                - 0.5 * lam2_tmax_clamped * sse_tmax_change
+                + 0.5 * S_bt * torch.log(lam2_tmax_clamped)
+                - 0.5 * S_bt * math.log(2 * math.pi)
+            )                                       # (B,T)
+
+            # Média por timestep (B,T). Se preferir, some e divida por B*T explicitamente.
+            L3 = -(log_ptmax.sum())
+        else:
+            L1 = sse.sum()
+            err_change = err * changing_state
+            sse_tmax_change = (err_change**2).sum(dim=-1)
+            L3 = sse_tmax_change.sum()
         # Perda do ruído
         L2 = F.mse_loss(self.noise_head(state), noise,reduction='sum') # (B,T)
                           # (B,T,S)
-        lam_t_tmax = F.softplus(self.lambda_tmax_head(state)).clamp(min=1e-8, max=1e8)  # (B,T,1)
-        lam2_tmax  = lam_t_tmax.squeeze(-1)                                            # (B,T)
-        lam2_tmax_clamped = lam2_tmax.clamp(min=0.1)  # novo tensor, sem in-place
-        offset_state_pred = (state_pred - ts_batch.unsqueeze(-1)).clamp(min=0)
-        offset_tmax = (tmax - ts_batch.unsqueeze(-1)).clamp(min=0)  
-        changing_state = (offset_state_pred>0).float()
-        offset_state_pred = (status_pred_window*changing_state - offset_state_pred).clamp(min=0)
-        offset_tmax = (status_pred_window - offset_tmax).clamp(min=0)
 
-
-        err = offset_tmax - offset_state_pred   # (B,T,S)
-        err_no_change = err * (1-changing_state)
-        err_change = err * changing_state
-        sse_tmax_no_change = (err_no_change**2).sum(dim=-1)              # (B,T)  soma sobre S
-        sse_tmax_change = (err_change**2).sum(dim=-1)*1000
-        S_bt = torch.full_like(lam2_tmax, float(err.size(-1)))   # (B,T)
-        log_ptmax = (
-            - 0.5 * lam2_tmax * sse_tmax_no_change
-            - 0.5 * lam2_tmax_clamped * sse_tmax_change
-            + 0.5 * S_bt * torch.log(lam2_tmax_clamped)
-            - 0.5 * S_bt * math.log(2 * math.pi)
-        )                                       # (B,T)
-
-        # Média por timestep (B,T). Se preferir, some e divida por B*T explicitamente.
-        L3 = -(log_ptmax.sum())
         # ----- L4 (máscara) -----
         # máscara binária: 1 se ao menos um canal está presente no timestep
                 # (B, T, 1)
@@ -658,7 +679,7 @@ class TSDiffusion(nn.Module):
         #else:
         L1_div = nobs.sum().clamp(min=1.0)
         L2_div = float(state.numel())
-        L3_div = float(err.numel())
+        L3_div = float(err.numel() if not mse else changing_state.sum().item() or 1.0)
         L4_div = float(mb_pred.numel())
 
         L2_result = self.lam[1]*L2/L2_div
@@ -682,7 +703,8 @@ class TSDiffusion(nn.Module):
         timestamp_col: str,
         status_pred_window: np.float32,
         window_size: int = None,
-        device: torch.device = None
+        device: torch.device = None,
+        mse: bool = False
     ):
         batch_size = 200
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -700,18 +722,23 @@ class TSDiffusion(nn.Module):
                 x, ts_batch, m, p = x.to(device), ts_batch.to(device), m.to(device), p.to(device)
                 if s is not None: s = s.to(device)
                 t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
-
+                t0_ = torch.zeros_like(t)
                 # 2) probabilidade de *extra-missing* cresce com t
-                p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
-                p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
-                rand_mask = (torch.rand_like(m) > p_drop_t).float()
+                #p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
+                #p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
+                rand_mask = torch.ones_like(m).float()
                 rand_mask[:, -1, :] = 0.0   # força último timestamp a ser 0 em todos os canais
                 m_test   = m * rand_mask
                 x_masked = x * m_test
+                state, noise, x_hat, tmax = self.forward(x_masked, t0_, timestamps=ts_batch, static_feats=s, return_x_hat=True, 
+                                                         return_pred_state=True, mask=m_test)
+                loss, L1, _, L3, L4 = self._compute_loss(
+                    x, x_hat, tmax, state, ts_batch, m, m_test, noise, p, status_pred_window, mse
+                )
                 state, noise, x_hat, tmax = self.forward(x_masked, t, timestamps=ts_batch, static_feats=s, return_x_hat=True, 
                                                          return_pred_state=True, mask=m_test)
-                loss, L1, L2, L3, L4 = self._compute_loss(
-                    x, x_hat, tmax, state, ts_batch, m, m_test, noise, p, status_pred_window
+                loss, _, L2, _, _ = self._compute_loss(
+                    x, x_hat, tmax, state, ts_batch, m, m_test, noise, p, status_pred_window, mse
                 )
                 for i,item in enumerate([L1,L2,L3,L4]):
                     total_loss[i][0]+=item[0]
@@ -728,9 +755,8 @@ class TSDiffusion(nn.Module):
             ts_raw = pd.to_datetime(df[timestamp_col]).astype("int64") / 1e9
         else:
             ts_raw = pd.to_datetime(df.index).astype("int64") / 1e9
-
-        ts_np = ts_raw.to_numpy(dtype=np.float32)
-        ts_rel = (ts_np - t0) / TS_SPAN                 # começa em 0
+        t0 = ts_raw[0]
+        ts_rel = ((ts_raw - t0) / TS_SPAN).to_numpy(dtype=np.float32)               # começa em 0
 
         # garante numérico; valores inválidos viram NaN
         state_pred = df[predict_state_cols].values

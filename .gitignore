@@ -6,6 +6,7 @@ datasets/
 *.txt
 *.jpeg
 *.jpg
+*.pt
 
 # Repository paths
 dataloaders/benchmark/3w_dataset/data/

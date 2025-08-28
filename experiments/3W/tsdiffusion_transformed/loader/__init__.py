@@ -96,16 +96,16 @@ class Loader3W(object):
                             if i == state:
                                 if c > status_pred_window:
                                     status_pred[i] += [np.nan] * (c - status_pred_window)
-                                    status_pred[i]+= [row.Index.value] * status_pred_window
+                                    status_pred[i]+= [row.Index.value / 1e9] * status_pred_window
                                 else:
-                                    status_pred[i] += [row.Index.value] * c
+                                    status_pred[i] += [row.Index.value / 1e9] * c
                             else:
                                 status_pred[i] += [np.nan] * c
                         c = 0
 
                 for i in range(10):
                     status_pred[i] += [np.nan] * c
-                    dataset[f'state-pred-{i}'] = pd.to_datetime(status_pred[i]).astype("int64") / 1e9
+                    dataset[f'state-pred-{i}'] = status_pred[i]
 
             yield dataset
                     
