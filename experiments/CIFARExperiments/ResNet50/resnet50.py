@@ -62,7 +62,7 @@ def load_cifar10(path="../../../datasets/cifar10", batch_size=100):
 
 
 def create_model():
-    weights = ResNet50_Weights.DEFAULT
+    weights = ResNet50_Weights.IMAGENET1K_V2
     model = resnet50(weights=weights)
     model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
     model = model.to(DEVICE)
