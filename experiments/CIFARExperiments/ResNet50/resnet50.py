@@ -278,27 +278,32 @@ def main():
 
     print("Training complete, starting evaluation. ")
 
+    # load result/fold_metrics.csv
+    with open("result/fold_metrics.csv", "r") as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            fold_accuracies.append(float(row["best_val_acc"]))
+            fold_loss.append(float(row["best_val_loss"]))
+
     # Check best fold and run test
     best_fold = np.argmax(fold_accuracies)
     print(
         f"Best Fold: {best_fold}, Best Val Acc: {fold_accuracies[best_fold]:.4f}, Best Val Loss: {fold_loss[best_fold]:.4f}"
     )
     # load best fold and evaluate over test_set
-    model.load_state_dict(
-        torch.load(args.save_dir + f"checkpoints/fold_{best_fold}.pkl")
-    )
+    model = create_model()
+    model.load_state_dict(torch.load(f"checkpoints/fold_{best_fold}.pkl"))
+    criterion, _, _ = create_criterion_and_optimizer(model, args.lr)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
     test_loss, test_acc = evaluate_one_epoch(model, criterion, test_loader)
     print(f"Test Acc: {test_acc:.4f} +- {np.std(fold_accuracies):.4f}")
     print(f"Test Loss: {test_loss:.4f} +- {np.std(fold_loss):.4f}")
 
     # Save test results to a new csv.
-    # Add +- std as new column
-    with open("results/test_results.csv", "a", newline="") as csvfile:
+    with open("result/test_results.csv", "w", newline="") as csvfile:
         writer = csv.DictWriter(
             csvfile,
             fieldnames=[
-                "fold",
                 "test_acc",
                 "test_loss",
                 "test_acc_std",
@@ -307,7 +312,6 @@ def main():
         )
         writer.writerow(
             {
-                "fold": best_fold,
                 "test_acc": test_acc,
                 "test_loss": test_loss,
                 "test_acc_std": np.std(fold_accuracies),
