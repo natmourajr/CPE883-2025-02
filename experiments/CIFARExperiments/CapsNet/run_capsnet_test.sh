@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAPSNET_SCRIPT="$SCRIPT_DIR/cifar_capsnet.py"
 DATA_DIR="../../../datasets/cifar10"
 SAVE_DIR="$SCRIPT_DIR/result"
-WEIGHTS="$SAVE_DIR/epoch8.pkl"  # Change if you want to test a different weights file
+WEIGHTS="$SAVE_DIR/trained_model_4.pkl"  
 
 # Default arguments
 BATCH_SIZE=100
