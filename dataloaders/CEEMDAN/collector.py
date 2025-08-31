@@ -21,7 +21,7 @@ from matplotlib import pyplot as plt
 import pywt
 from scipy.signal import stft
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 import torch
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset/'
@@ -37,7 +37,10 @@ class Collector:
         pass
 
     
-    def read_data(self, file, serie_size, window_size, predict_steps, year=2017, freq_transform=True):
+    def read_data(
+            self, file, serie_size, window_size, predict_steps, batch_size=None,
+            year=2017, freq_transform=True
+            ):
         
         if file=='final_la_haute_R0711.csv':
             P_col = 'P_avg'
@@ -65,10 +68,39 @@ class Collector:
         if freq_transform:
             coefficients_list = []
             coefficients_list = create_freq_transform(X)
+            dataset = CoefficientsDataset(coefficients_list, y)
 
-        dataset = CoefficientsDataset(coefficients_list, y)
-    
-        return dataset
+            return dataset
+
+        else:
+            # 2. Dividir em treino/teste
+            split = int(0.8 * len(X))
+            X_train, y_train = X[:split], y[:split]
+            X_test, y_test = X[split:], y[split:]
+
+            # X_train shape: (num_samples, window_size)
+            scaler_X = StandardScaler()
+            X_train_scaled = scaler_X.fit_transform(X_train)  # shape permanece (num_samples, window_size)
+            X_test_scaled = scaler_X.transform(X_test)
+
+            # Normalização y
+            y_train = y_train.reshape(-1,1)
+            y_test = y_test.reshape(-1,1)
+            scaler_y = StandardScaler()
+            y_train_scaled = scaler_y.fit_transform(y_train)
+            y_test_scaled = scaler_y.transform(y_test)
+
+            # Criar datasets (normalmente o dataset adiciona a dimensão da feature)
+            train_dataset = PowerSeriesDataset(X_train_scaled, y_train_scaled)
+            test_dataset = PowerSeriesDataset(X_test_scaled, y_test_scaled)
+
+            # 6. Criar DataLoaders
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            dataset = PowerSeriesDataset(X, y)
+
+            return train_loader, test_loader
+
 
     def create_date_feats(self, df):
 
@@ -170,6 +202,22 @@ class CoefficientsDataset(Dataset):
     def __init__(self, coefficients, targets):
         self.X = torch.tensor(coefficients, dtype=torch.float32).unsqueeze(1)  # shape: (B, 1, S, T)
         self.y = torch.tensor(targets, dtype=torch.float32)
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
+
+
+class PowerSeriesDataset(Dataset):
+    def __init__(self, X, y):
+        """
+        X: array-like de shape (num_amostras, seq_len) ou (num_amostras, seq_len, num_features)
+        y: array-like de shape (num_amostras, horizon) ou (num_amostras, horizon, num_features)
+        """
+        self.X = torch.tensor(X, dtype=torch.float32).unsqueeze(-1)  # (num_amostras, seq_len, 1)
+        self.y = torch.tensor(y, dtype=torch.float32)
 
     def __len__(self):
         return len(self.X)
