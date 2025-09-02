@@ -444,12 +444,12 @@ class TSDiffusion(nn.Module):
         loader = Loader3W()
         loader.load_stats('./stats.pkl')
         delta_pred_window = np.float32(status_pred_window / TS_SPAN)
-        test_loss_dataset = [[0.0,0.0] for _ in range(4)]
         datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
-        for dataset in datasets:
+        test_loss_dataset = [[0.0,0.0] for _ in range(4)]
+        for num_dataset, dataset in enumerate(datasets):
             tscv = TimeSeriesSplit(n_splits=8)
             partial_split = 1
-            for _, test_idx in tscv.split(dataset):
+            for train_idx, test_idx in tscv.split(dataset):
                 if partial_split > 4:
                     df_test = dataset[test_idx]
                     results = self.test_model(
@@ -466,9 +466,9 @@ class TSDiffusion(nn.Module):
                 for idx in range(4):
                     test_loss_dataset[idx][0]+=results[idx][0]
                     test_loss_dataset[idx][1]+=results[idx][1]
-
+                partial_split+=1
         test_loss = [item[0]/item[1] for item in test_loss_dataset]
-        test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
+        test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])        
         print(f'Test completed - Test Loss: {test_loss_total:.6f}')
         print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')  
     def train3W(
@@ -520,6 +520,7 @@ class TSDiffusion(nn.Module):
                     for idx in range(4):
                         test_loss_dataset[idx][0]+=results[idx][0]
                         test_loss_dataset[idx][1]+=results[idx][1]
+                    partial_split+=1
             test_loss = [item[0]/item[1] for item in test_loss_dataset]
             test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             lower_loss = test_loss_total
