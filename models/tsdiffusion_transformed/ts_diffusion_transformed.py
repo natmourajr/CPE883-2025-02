@@ -540,7 +540,7 @@ class TSDiffusion(nn.Module):
                         df_train = dataset.iloc[train_idx]
                         df_val = dataset.iloc[val_idx]
                     else:
-                        df_train = dataset.iloc[train_idx+val_idx]
+                        df_train = dataset.iloc[np.concatenate([train_idx, val_idx])]
                         df_val = None   
 
                     train = self.train_model(
