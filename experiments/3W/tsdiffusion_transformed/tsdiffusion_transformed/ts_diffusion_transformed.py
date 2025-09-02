@@ -444,27 +444,31 @@ class TSDiffusion(nn.Module):
         loader = Loader3W()
         loader.load_stats('./stats.pkl')
         delta_pred_window = np.float32(status_pred_window / TS_SPAN)
-        test_loss_dataset = [[0.0,0.0] for _ in range(4)]
         datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
+        test_loss_dataset = [[0.0,0.0] for _ in range(4)]
         for num_dataset, dataset in enumerate(datasets):
-            if num_dataset >= len(loader.stats['ids']) - test_datasets:
-                results = self.test_model(
-                    df_test=dataset,
-                    feature_cols=feature_cols,
-                    predict_state_cols=predict_state_cols,
-                    static_features_cols=static_features_cols,
-                    timestamp_col='index',
-                    window_size=window_size,
-                    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-                    status_pred_window=delta_pred_window,
-                    mse=mse
-                )
+            tscv = TimeSeriesSplit(n_splits=8)
+            partial_split = 1
+            for train_idx, test_idx in tscv.split(dataset):
+                if partial_split > 4:
+                    df_test = dataset[test_idx]
+                    results = self.test_model(
+                        df_test=df_test,
+                        feature_cols=feature_cols,
+                        predict_state_cols=predict_state_cols,
+                        static_features_cols=static_features_cols,
+                        status_pred_window=delta_pred_window,
+                        timestamp_col='index',
+                        window_size=window_size,
+                        device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+                        mse=True
+                    )
                 for idx in range(4):
                     test_loss_dataset[idx][0]+=results[idx][0]
                     test_loss_dataset[idx][1]+=results[idx][1]
-
+                partial_split+=1
         test_loss = [item[0]/item[1] for item in test_loss_dataset]
-        test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
+        test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])        
         print(f'Test completed - Test Loss: {test_loss_total:.6f}')
         print(f'Test L1: {test_loss[0]:.6f}, Test L2: {test_loss[1]:.6f}, Test L3: {test_loss[2]:.6f}, Test L4: {test_loss[3]:.6f}')  
     def train3W(
@@ -493,24 +497,30 @@ class TSDiffusion(nn.Module):
             lower_loss = float('inf')
         else:
             print('Testing model...')
-            test = pd.DataFrame()
+            #test = pd.DataFrame()
             datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
             test_loss_dataset = [[0.0,0.0] for _ in range(4)]
             for num_dataset, dataset in enumerate(datasets):
-                if num_dataset >= len(loader.stats['ids']) - test_datasets:
-                    results = self.test_model(
-                        df_test=dataset,
-                        feature_cols=feature_cols,
-                        predict_state_cols=predict_state_cols,
-                        static_features_cols=static_features_cols,
-                        status_pred_window=delta_pred_window,
-                        timestamp_col='index',
-                        window_size=window_size,
-                        device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                    )
+                tscv = TimeSeriesSplit(n_splits=8)
+                partial_split = 1
+                for train_idx, test_idx in tscv.split(dataset):
+                    if partial_split > 4:
+                        df_test = dataset[test_idx]
+                        results = self.test_model(
+                            df_test=df_test,
+                            feature_cols=feature_cols,
+                            predict_state_cols=predict_state_cols,
+                            static_features_cols=static_features_cols,
+                            status_pred_window=delta_pred_window,
+                            timestamp_col='index',
+                            window_size=window_size,
+                            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+                            mse=True
+                        )
                     for idx in range(4):
                         test_loss_dataset[idx][0]+=results[idx][0]
                         test_loss_dataset[idx][1]+=results[idx][1]
+                    partial_split+=1
             test_loss = [item[0]/item[1] for item in test_loss_dataset]
             test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             lower_loss = test_loss_total
@@ -521,79 +531,71 @@ class TSDiffusion(nn.Module):
             test_loss_dataset = [[0.0,0.0] for _ in range(4)]
             datasets = loader.preprocess(include_status_pred=True,status_pred_window=status_pred_window)
             for num_dataset, dataset in enumerate(datasets):
-                if num_dataset < len(loader.stats['ids']) - test_datasets:
-                    train_loss_dataset = [[0.0,0.0] for _ in range(4)]
-                    val_loss_dataset = [[0.0,0.0] for _ in range(4)]
-                    if validate:
-                        tscv = TimeSeriesSplit(n_splits=5)
-                        partial_split = 1
-                        for train_idx, val_idx in tscv.split(dataset):
-                            df_train = dataset.iloc[train_idx]
-                            df_val = dataset.iloc[val_idx]
-                            results = self.train_model(
-                                df_train=df_train,
-                                df_val=df_val,
-                                feature_cols=feature_cols,
-                                static_features_cols=static_features_cols,
-                                predict_state_cols=predict_state_cols,
-                                timestamp_col='index',
-                                status_pred_window=delta_pred_window,
-                                batch_size=batch_size,
-                                lr=lr,
-                                window_size=window_size,
-                                device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                            )
-                            for idx in range(4):
-                                train_loss_dataset[idx][0]+=results[0][idx][0]
-                                train_loss_dataset[idx][1]+=results[0][idx][1]
-                                val_loss_dataset[idx][0]+=results[1][idx][0]
-                                val_loss_dataset[idx][1]+=results[1][idx][1]
-                            train_loss = [item[0]/item[1] for item in train_loss_dataset]
-                            train_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(train_loss)]) 
-                            val_loss = [item[0]/item[1] for item in val_loss_dataset]
-                            val_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(val_loss)]) 
-                            print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])} - Parcial {partial_split}/5' +
-                                  f'- Loss - Train: {train_loss_total:.6f} Val: {val_loss_total:.6f}')
-                            print(f'(Train/Val) L1:{train_loss[0]:.6f}/{val_loss[0]:.6f}, L2: {train_loss[1]:.6f}/{val_loss[1]:.6f}, ' +
-                                f'L3: {train_loss[2]:.6f}/{val_loss[2]:.6f}, L4: {train_loss[3]:.6f}/{val_loss[3]:.6f}')  
-                            partial_split+=1
+                train_loss_dataset = [[0.0,0.0] for _ in range(4)]
+                val_loss_dataset = [[0.0,0.0] for _ in range(4)]
+                tscv = TimeSeriesSplit(n_splits=8)
+                partial_split = 1
+                for train_idx, val_idx in tscv.split(dataset):
+                    if validate and partial_split<=4:
+                        df_train = dataset.iloc[train_idx]
+                        df_val = dataset.iloc[val_idx]
                     else:
-                        results = self.train_model(
-                            df_train=dataset,
-                            df_val=None,
-                            feature_cols=feature_cols,
-                            static_features_cols=static_features_cols,
-                            predict_state_cols=predict_state_cols,
-                            timestamp_col='index',
-                            status_pred_window=delta_pred_window,
-                            batch_size=batch_size,
-                            lr=lr,
-                            window_size=window_size,
-                            device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                        )  
-                        for idx in range(4):
-                            train_loss_dataset[idx][0]+=results[0][idx][0]
-                            train_loss_dataset[idx][1]+=results[0][idx][1]            
-                        train_loss = [item[0]/item[1] for item in train_loss_dataset]
-                        train_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(train_loss)])       
-                        print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])}' +
-                                f'- Loss - Train: {train_loss_total:.6f}')
-                        print(f'(Train) L1:{train_loss[0]:.6f}, L2: {train_loss[1]:.6f}, ' +
-                            f'L3: {train_loss[2]:.6f}, L4: {train_loss[3]:.6f}')      
-                else:
-                    results = self.test_model(
-                        df_test=dataset,
+                        df_train = dataset.iloc[train_idx+val_idx]
+                        df_val = None   
+
+                    train = self.train_model(
+                        df_train=df_train,
+                        df_val=None,
                         feature_cols=feature_cols,
-                        predict_state_cols=predict_state_cols,
                         static_features_cols=static_features_cols,
-                        status_pred_window=delta_pred_window,
+                        predict_state_cols=predict_state_cols,
                         timestamp_col='index',
+                        status_pred_window=delta_pred_window,
+                        batch_size=batch_size,
+                        lr=lr,
                         window_size=window_size,
                         device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                     )
+                    if partial_split>4 or validate:
+                        val = self.test_model(
+                            df_val,
+                            feature_cols,
+                            predict_state_cols,
+                            static_features_cols,
+                            'index',
+                            delta_pred_window,
+                            window_size,
+                            torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+                            True
+                        )
+
                     for idx in range(4):
-                        test_loss_dataset[idx][0]+=results[idx][0]
-                        test_loss_dataset[idx][1]+=results[idx][1]  
+                        train_loss_dataset[idx][0]+=train[0][idx][0]
+                        train_loss_dataset[idx][1]+=train[0][idx][1]
+                        if partial_split<=4:
+                            if validate:
+                                val_loss_dataset[idx][0]+=val[idx][0]
+                                val_loss_dataset[idx][1]+=val[idx][1]
+                        else:
+                            test_loss_dataset[idx][0]+=val[idx][0]
+                            test_loss_dataset[idx][1]+=val[idx][1]                                          
+                        
+                    train_loss = [item[0]/item[1] for item in train_loss_dataset]
+                    train_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(train_loss)]) 
+                    if validate:
+                        val_loss = [item[0]/item[1] for item in val_loss_dataset]
+                        val_loss_total = sum([item*self.lam[idx] for idx,item in enumerate(val_loss)]) 
+                        print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])} - Parcial {partial_split}/8' +
+                                f'- Loss - Train: {train_loss_total:.6f} Val (MSE): {val_loss_total:.6f}')
+                        print(f'(Train/Val (MSE)) L1:{train_loss[0]:.6f}/{val_loss[0]:.6f}, L2: {train_loss[1]:.6f}/{val_loss[1]:.6f}, ' +
+                            f'L3: {train_loss[2]:.6f}/{val_loss[2]:.6f}, L4: {train_loss[3]:.6f}/{val_loss[3]:.6f}')  
+                    else:
+                        print(f'Epoch {i}/{epochs} - Dataset {num_dataset+1}/{len(loader.stats['ids'])} - Parcial {partial_split}/8' +
+                                f'- Loss - Train: {train_loss_total:.6f}')
+                        print(f'(Train) L1:{train_loss[0]:.6f}, L2: {train_loss[1]:.6f}, ' +
+                            f'L3: {train_loss[2]:.6f}, L4: {train_loss[3]:.6f}')      
+                    partial_split+=1 
+
             test_loss = [item[0]/item[1] for item in test_loss_dataset]
             test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
             if early_stopping and test_loss_total < lower_loss:
@@ -683,10 +685,10 @@ class TSDiffusion(nn.Module):
         L4_div = float(mb_pred.numel())
 
         L2_result = self.lam[1]*L2/L2_div
-        if  L2_result.item() > 0.2:
-            loss = L2_result
-        else:
-            loss = self.lam[0]*L1/L1_div + self.lam[1]*L2/L2_div + self.lam[2]*L3/L3_div + self.lam[3]*L4/L4_div
+        #if  L2_result.item() > 0.2:
+        #    loss = L2_result
+        #else:
+        loss = self.lam[0]*L1/L1_div + self.lam[1]*L2/L2_div + self.lam[2]*L3/L3_div + self.lam[3]*L4/L4_div
 
         return (loss,
                 (float(L1.item()), float(L1_div.item())),
@@ -892,9 +894,9 @@ class TSDiffusion(nn.Module):
             x, ts_batch, m, p = x.to(device, non_blocking = True), ts_batch.to(device, non_blocking = True), m.to(device, non_blocking = True), p.to(device, non_blocking = True)
             if s is not None: s = s.to(device, non_blocking = True)
             t = torch.randint(0, self.num_steps, (x.size(0),), device=device)
-
+            t_mask = torch.randint(0, self.num_steps, (x.size(0),), device=device)
             # 2) probabilidade de *extra-missing* cresce com t
-            p_drop_t = (t.float() / (self.num_steps - 1)) * max_drop   # (B,)
+            p_drop_t = (t_mask.float() / (self.num_steps - 1)) * max_drop   # (B,)
             p_drop_t = p_drop_t.view(-1, 1, 1)                         # broadcast
             rand_mask = (torch.rand_like(m) > p_drop_t).float()
             rand_mask[:, -1, :] = 0.0   # força último timestamp a ser 0 em todos os canais
