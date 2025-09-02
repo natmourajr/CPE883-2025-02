@@ -451,7 +451,7 @@ class TSDiffusion(nn.Module):
             partial_split = 1
             for train_idx, test_idx in tscv.split(dataset):
                 if partial_split > 4:
-                    df_test = dataset[test_idx]
+                    df_test = dataset.iloc[test_idx]
                     results = self.test_model(
                         df_test=df_test,
                         feature_cols=feature_cols,
@@ -463,9 +463,9 @@ class TSDiffusion(nn.Module):
                         device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
                         mse=True
                     )
-                for idx in range(4):
-                    test_loss_dataset[idx][0]+=results[idx][0]
-                    test_loss_dataset[idx][1]+=results[idx][1]
+                    for idx in range(4):
+                        test_loss_dataset[idx][0]+=results[idx][0]
+                        test_loss_dataset[idx][1]+=results[idx][1]
                 partial_split+=1
         test_loss = [item[0]/item[1] for item in test_loss_dataset]
         test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])        
@@ -505,7 +505,7 @@ class TSDiffusion(nn.Module):
                 partial_split = 1
                 for train_idx, test_idx in tscv.split(dataset):
                     if partial_split > 4:
-                        df_test = dataset[test_idx]
+                        df_test = dataset.iloc[test_idx]
                         results = self.test_model(
                             df_test=df_test,
                             feature_cols=feature_cols,
@@ -517,9 +517,9 @@ class TSDiffusion(nn.Module):
                             device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
                             mse=True
                         )
-                    for idx in range(4):
-                        test_loss_dataset[idx][0]+=results[idx][0]
-                        test_loss_dataset[idx][1]+=results[idx][1]
+                        for idx in range(4):
+                            test_loss_dataset[idx][0]+=results[idx][0]
+                            test_loss_dataset[idx][1]+=results[idx][1]
                     partial_split+=1
             test_loss = [item[0]/item[1] for item in test_loss_dataset]
             test_loss_total = sum([item*self.lam[i] for i,item in enumerate(test_loss)])
