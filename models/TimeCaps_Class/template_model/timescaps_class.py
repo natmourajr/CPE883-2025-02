@@ -1,7 +1,49 @@
+"""
+Time series Capsnet for a classification problem based on the model TimeCaps[1].
+
+Summary: Kan Classification of 3W pipeline data using P-MON-CKP and T-JUS-CKP as inputs.
+
+Considerations:
+    - 
+
+
+version: 0.0.1
+date: 13/07/2025
+
+copyright Copyright (c) 2025
+
+References:
+[1] 
+"""
+import os
+import sys
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+from datetime import datetime
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
+from timm.layers import PatchEmbed
+from typing import Union, Tuple
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+
+sys.path.append("CPE883-2025-02/models/")
+sys.path.append("CPE883-2025-02/dataloaders/3W/")
+sys.path.append("/3W")
+
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+from dataloaders.benchmark.collector import Collector3W
+
 import numpy as np
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
-from capsulenet_rnn_dim_change import CapsNet  # Importa o modelo do arquivo local
+from TimeCaps_master.capsulenet_rnn_dim_change import CapsNet  # Importa o modelo do arquivo local
 
 # --- Parâmetros do problema ---
 SEQ_LEN = 360          # comprimento da sequência temporal
