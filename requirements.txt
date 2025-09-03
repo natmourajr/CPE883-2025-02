@@ -23,3 +23,5 @@ openpyxl # para .xlsx
 
 # Para arquivos de configuração
 pyyaml
+
+tqdm

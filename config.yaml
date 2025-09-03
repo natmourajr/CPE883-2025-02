@@ -1,4 +1,4 @@
-# config.yaml - Versão Corrigida e Comentada
+# config.yaml
 
 # ===================================================================
 # 1. PARÂMETROS DE DADOS E VALIDAÇÃO
@@ -30,8 +30,8 @@ training:
   batch_size: 4
   num_workers: 0
   
-  epochs: 100
-  early_stopping_patience: 10
+  epochs: 500
+  early_stopping_patience: 25
 
 # ===================================================================
 # 4. ARQUITETURAS DOS MODELOS
