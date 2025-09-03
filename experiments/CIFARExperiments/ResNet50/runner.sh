@@ -8,6 +8,7 @@ LR=0.005
 WEIGHTS=""
 FOLDS=5
 DATA_DIR="/home/eduardo/doc/CPE883-2025-02/datasets/cifar10/"
+MODEL="vit"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -36,13 +37,17 @@ while [[ "$#" -gt 0 ]]; do
 			DATA_DIR="$2"
 			shift 2
 			;;
+		--model)
+			MODEL="$2"
+			shift 2
+			;;
 		*)
 			shift
 			;;
 	esac
 done
 
-CMD="python3 resnet50.py --epochs $EPOCHS --batch_size $BATCH_SIZE --lr $LR --folds $FOLDS --data_dir $DATA_DIR"
+CMD="python3 runner.py --epochs $EPOCHS --batch_size $BATCH_SIZE --lr $LR --folds $FOLDS --data_dir $DATA_DIR --model $MODEL"
 if [[ -n "$WEIGHTS" ]]; then
 	CMD+=" --weights $WEIGHTS"
 fi
