@@ -138,10 +138,11 @@ Cada imagem salva inclui:
 - [x] Implementação de CapsNet
 - [x] Implementação de CKAN
 - [x] Implementação de DeepONet
+- [ ] Implementação do modelo baseline
 - [x] Métricas (Dice, IoU)
-- [ ] Generalização do loop de treino
-- [ ] Testes automatizados
-- [ ] Experimentos estatísticos entre modelos
+- [ ] Generalização do loop de treino arquivo main_*.py
+- [ ] Plotar curva loss de validação
+- [ ] Salvar as predições e métricas de teste
 
 ##### 🧪 Requisitos
 ```
