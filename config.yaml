@@ -5,11 +5,10 @@
 # ===================================================================
 dataset:
   # Caminho para a pasta que contém as imagens. 
-  # Mantido como você ajustou.
   path: "data/images"
   
   # Semente aleatória para garantir que a divisão do K-Fold seja reprodutível.
-  random_seed: 42
+  random_seed: 117
 
 cross_validation:
   n_splits: 10
