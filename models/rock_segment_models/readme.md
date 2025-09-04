@@ -7,7 +7,7 @@ Este projeto tem como objetivo realizar segmentação semântica em imagens de m
 Projeto_segmentacao/
 │
 ├── rock_seg_loader/
-│   └── rock_dataset_multi.py           # DataLoader com suporte multi-amostras e rastreabilidade
+│   └── rock_dataset_multi_rev2.py           # DataLoader com suporte multi-amostras e rastreabilidade
 │
 ├── rock_seg_model/
 │   ├── caps_rock_seg/                  # CapsNet
