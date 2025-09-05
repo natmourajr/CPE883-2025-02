@@ -3,6 +3,7 @@ import copy
 import torch.nn as nn
 import torch.optim as optim
 from cifar_dataloaders import CIFAR10Dataset
+from CKAN import CKAN
 from torch.utils.data import Subset, DataLoader
 from sklearn.model_selection import StratifiedKFold
 from tqdm import tqdm
@@ -23,6 +24,7 @@ import torchvision.transforms as transforms
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
 NUM_CLASSES = 10
 
 
@@ -83,7 +85,7 @@ def create_model(model_type, n_classes=10):
     if model_type == "resnet":
         weights = ResNet50_Weights.IMAGENET1K_V2
         model = resnet50(weights=weights)
-        model.fc = nn.Linear(model.fc.in_features, NUM_CLASSES)
+        model.fc = nn.Linear(model.fc.in_features, n_classes)
         model = model.to(DEVICE)
 
     if model_type == "vit":
@@ -100,6 +102,10 @@ def create_model(model_type, n_classes=10):
         for param in model.heads.parameters():
             param.requires_grad = True
 
+        model = model.to(DEVICE)
+
+    if model_type == "ckan":
+        model = CKAN(32, n_classes)
         model = model.to(DEVICE)
 
     return model
@@ -163,7 +169,7 @@ def evaluate_one_epoch(model, criterion, val_loader):
     return val_loss, val_acc, np.array(all_preds), np.array(all_labels)
 
 
-def plot_curves(train_losses, train_accs, val_losses, val_accs, fold):
+def plot_curves(train_losses, train_accs, val_losses, val_accs, fold, model):
     plt.figure(figsize=(12, 4))
     # Loss plot
     plt.subplot(1, 2, 1)
@@ -184,7 +190,7 @@ def plot_curves(train_losses, train_accs, val_losses, val_accs, fold):
     plt.legend()
 
     os.makedirs("result", exist_ok=True)
-    plt.savefig(f"result/curves_fold_{fold}.png")
+    plt.savefig(f"result/{model}/curves_fold_{fold}.png")
 
 
 def set_seeds(seed):
@@ -205,12 +211,11 @@ def main():
     train_set, test_set = load_cifar10(args.data_dir, model_type=args.model)
     targets = np.array(train_set.targets)
     skf = StratifiedKFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
-    # classes = train_set.classes
     fold_accuracies, fold_loss = [], []
     patience = 5
 
     # Prepare CSV logging for fold metrics
-    csv_path = "result/fold_metrics.csv"
+    csv_path = f"result/{args.model}/fold_metrics.csv"
     os.makedirs("result", exist_ok=True)
     if not os.path.exists(csv_path):
         with open(csv_path, "w", newline="") as csvfile:
@@ -291,7 +296,7 @@ def main():
             print(f"Warning: No best_state_dict found for fold {fold}!")
 
         # Save curves
-        plot_curves(train_losses, train_accs, val_losses, val_accs, fold)
+        plot_curves(train_losses, train_accs, val_losses, val_accs, fold, args.model)
         plt.close("all")
 
         print(
@@ -320,7 +325,7 @@ def main():
     print("Training complete, starting evaluation. ")
 
     # load result/fold_metrics.csv
-    with open("result/fold_metrics.csv", "r") as csvfile:
+    with open(f"result/{args.model}/fold_metrics.csv", "r") as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
             fold_accuracies.append(float(row["best_val_acc"]))
@@ -351,11 +356,11 @@ def main():
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.title("Confusion Matrix - Test Set")
-    plt.savefig("result/confusion_matrix_test.png")
+    plt.savefig(f"result/{args.model}/confusion_matrix_test.png")
     plt.close()
 
     # Save test results to a new csv.
-    with open("result/test_results.csv", "w", newline="") as csvfile:
+    with open(f"result/{args.model}/test_results.csv", "w", newline="") as csvfile:
         writer = csv.DictWriter(
             csvfile,
             fieldnames=[

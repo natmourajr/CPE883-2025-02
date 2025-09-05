@@ -15,7 +15,7 @@ if __name__ == "__main__":
     import os
 
     # setting the hyper parameters
-    parser = argparse.ArgumentParser(description="Capsule Network on MNIST.")
+    parser = argparse.ArgumentParser(description="Capsule Network.")
     parser.add_argument("--epochs", default=50, type=int)
     parser.add_argument("--batch_size", default=100, type=int)
     parser.add_argument("--lr", default=0.001, type=float, help="Initial learning rate")
