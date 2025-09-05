@@ -47,7 +47,7 @@ def parse_args():
         "--model",
         default="resnet",
         type=str,
-        choices=["resnet", "vit"],
+        choices=["resnet", "vit", "ckan"],
         help="Model architecture to use",
     )
     parser.add_argument(
