@@ -215,8 +215,9 @@ def main():
     patience = 5
 
     # Prepare CSV logging for fold metrics
-    csv_path = f"result/{args.model}/fold_metrics.csv"
-    os.makedirs("result", exist_ok=True)
+    csv_dir = f"result/{args.model}"
+    os.makedirs(csv_dir, exist_ok=True)
+    csv_path = f"{csv_dir}/fold_metrics.csv"
     if not os.path.exists(csv_path):
         with open(csv_path, "w", newline="") as csvfile:
             fieldnames = ["fold", "best_val_acc", "best_val_loss", "train_time_s"]
