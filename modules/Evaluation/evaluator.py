@@ -53,7 +53,17 @@ def save_roc_curve(y_true, y_probs, set_name, save_dir):
     np.savez(roc_data_path, fpr=fpr, tpr=tpr, auc=auc)
     print(f"Vetores da Curva ROC para '{set_name}' salvos em: {roc_data_path}")
     
-   
+def find_optimal_threshold(y_true, y_probs):
+    """
+    Encontra o limiar de decisão ótimo usando .
+    """
+    fpr, tpr, thresholds = roc_curve(y_true, y_probs)
+    # Ignora o primeiro threshold que pode ser > 1
+    sp = np.sqrt(  np.sqrt(tpr*(1-fpr)) * (0.5*(tpr+(1-fpr)))  )
+    knee = np.argmax(sp)
+    optimal_threshold = thresholds[knee]  
+    
+    return optimal_threshold   
 
 def plot_loss_curves(train_history, val_history, fold, save_dir):
     """Gera e salva o gráfico das curvas de perda de treino e validação."""
@@ -183,6 +193,9 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, dev_in
         # --- O conjunto 'Operação' é avaliado aqui ---
         sets_to_evaluate = {'Validação': val_loader, 'Operação': operacao_loader}
         
+        # --- Variável para armazenar o limiar ótimo encontrado na validação ---
+        optimal_threshold_for_fold = 0.5 # Valor padrão caso a validação falhe
+
         for set_name, data_loader in sets_to_evaluate.items():
             all_metadata, all_probs = [], []
             model.eval()
@@ -208,6 +221,18 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, dev_in
             results_df['probability'] = all_probs
             
             set_key = 'validation' if set_name == 'Validação' else 'operacao'
+
+            # Encontra o limiar ótimo no conjunto de VALIDAÇÃO
+            if set_name == 'Validação':
+                val_y_true = [m['true_label'] for m in all_metadata]
+                val_y_probs = all_probs
+                if len(np.unique(val_y_true)) > 1:
+                    optimal_threshold_for_fold = find_optimal_threshold(val_y_true, val_y_probs)
+                    fold_metrics['optimal_threshold'] = float(optimal_threshold_for_fold)
+                    print(f"  -> Limiar Ótimo encontrado no conjunto de Validação: {optimal_threshold_for_fold:.4f}")
+                else:
+                    print("  -> AVISO: Não foi possível calcular o limiar ótimo (apenas uma classe na validação). Usando 0.5.")
+                    fold_metrics['optimal_threshold'] = 0.5
 
             # ... (Análise por subgrupo - SEM ALTERAÇÕES na lógica interna) ...
             age_bins = [0, 40, 60, 120]
@@ -255,8 +280,10 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, dev_in
     print("SELEÇÃO DO MELHOR MODELO COM BASE NO CONJUNTO DE OPERAÇÃO")
     best_fold_index = np.nanargmax([res.get('auc_operacao_geral', 0.0) for res in fold_results])
     best_fold_num = best_fold_index + 1
+    best_model_threshold = fold_results[best_fold_index].get('optimal_threshold', 0.5)
     best_operacao_auc = fold_results[best_fold_index].get('auc_operacao_geral')
     print(f"Melhor desempenho no conjunto 'Operação' foi no Fold {best_fold_num} (AUC Geral: {best_operacao_auc:.4f})")
+    print(f"Limiar ótimo deste modelo (encontrado na validação do Fold {best_fold_num}): {best_model_threshold:.4f}")
     print("Este modelo será usado para a avaliação final no conjunto de Hold-Out.")
     
     # --- Bloco para avaliação final do MELHOR MODELO no conjunto Hold-Out ---
@@ -325,8 +352,8 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, dev_in
             if group_name == "geral":
                 plot_roc_curve(y_true_group, y_probs_group, "Final", "Hold-Out", holdout_dir)
                 save_roc_curve(y_true_group, y_probs_group, "Hold-Out", holdout_dir)
-                threshold = config['training'].get('decision_threshold', 0.5)
-                y_pred_class = (np.array(y_probs_group) >= threshold).astype(int)
+                print(f"  -> Usando limiar de {best_model_threshold:.4f} para métricas de classificação no Hold-Out.")
+                y_pred_class = (np.array(y_probs_group) >= best_model_threshold).astype(int)
                 tn, fp, fn, tp = confusion_matrix(y_true_group, y_pred_class, labels=[0, 1]).ravel()
                 sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0
                 specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0
