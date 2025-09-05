@@ -234,10 +234,10 @@ def main():
         train_subset = Subset(train_set, train_idx)
         val_subset = Subset(train_set, val_idx)
         train_loader = DataLoader(
-            train_subset, batch_size=args.batch_size, shuffle=True, num_workers=10
+            train_subset, batch_size=args.batch_size, shuffle=True, num_workers=8
         )
         val_loader = DataLoader(
-            val_subset, batch_size=args.batch_size, shuffle=False, num_workers=10
+            val_subset, batch_size=args.batch_size, shuffle=False, num_workers=8
         )
         best_val_acc = float("-inf")
         best_val_loss = float("inf")
@@ -256,7 +256,7 @@ def main():
             train_losses.append(train_loss)
             train_accs.append(train_acc)
 
-            val_loss, val_acc = evaluate_one_epoch(model, criterion, val_loader)
+            val_loss, val_acc, _, _ = evaluate_one_epoch(model, criterion, val_loader)
             val_losses.append(val_loss)
             val_accs.append(val_acc)
 
@@ -342,7 +342,7 @@ def main():
     model.load_state_dict(torch.load(f"checkpoints/fold_{best_fold}.pkl"))
     criterion, _, _ = create_criterion_and_optimizer(model, args.lr)
     test_loader = DataLoader(
-        test_set, batch_size=args.batch_size, shuffle=False, num_workers=10
+        test_set, batch_size=args.batch_size, shuffle=False, num_workers=8
     )
     test_loss, test_acc, test_preds, test_labels = evaluate_one_epoch(
         model, criterion, test_loader
