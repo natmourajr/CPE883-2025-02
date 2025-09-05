@@ -16,8 +16,9 @@ import random
 import csv
 from time import time
 from torchvision.models import resnet50, ResNet50_Weights
-from torchvision.models import vit_h_14, ViT_H_14_Weights
 from torchvision.models import vit_b_16, ViT_B_16_Weights
+
+
 import torchvision.transforms as transforms
 
 
@@ -69,7 +70,7 @@ def load_cifar10(path="../../../datasets/cifar10", model_type="vit"):
     # kwargs = {"num_workers": 1, "pin_memory": True}
 
     if model_type == "vit":
-        transform = transforms.Resize(518)
+        transform = transforms.Resize(384)
     else:
         transform = None
 
@@ -78,7 +79,7 @@ def load_cifar10(path="../../../datasets/cifar10", model_type="vit"):
     return train_set, test_set
 
 
-def create_model(model_type):
+def create_model(model_type, n_classes=10):
     if model_type == "resnet":
         weights = ResNet50_Weights.IMAGENET1K_V2
         model = resnet50(weights=weights)
@@ -86,9 +87,9 @@ def create_model(model_type):
         model = model.to(DEVICE)
 
     if model_type == "vit":
-        weights = ViT_H_14_Weights.IMAGENET1K_SWAG_E2E_V1
-        model = vit_h_14(weights=weights)
-        model.heads = nn.Sequential(nn.Linear(model.heads.head.in_features, 10))
+        weights = ViT_B_16_Weights.IMAGENET1K_SWAG_E2E_V1
+        model = vit_b_16(weights=weights)
+        model.heads = nn.Sequential(nn.Linear(model.heads.head.in_features, n_classes))
         # Freeze all layers
         for param in model.parameters():
             param.requires_grad = False
@@ -227,9 +228,11 @@ def main():
         train_subset = Subset(train_set, train_idx)
         val_subset = Subset(train_set, val_idx)
         train_loader = DataLoader(
-            train_subset, batch_size=args.batch_size, shuffle=True
+            train_subset, batch_size=args.batch_size, shuffle=True, num_workers=10
         )
-        val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
+        val_loader = DataLoader(
+            val_subset, batch_size=args.batch_size, shuffle=False, num_workers=10
+        )
         best_val_acc = float("-inf")
         best_val_loss = float("inf")
         best_state_dict = None
@@ -332,7 +335,9 @@ def main():
     model = create_model(args.model)
     model.load_state_dict(torch.load(f"checkpoints/fold_{best_fold}.pkl"))
     criterion, _, _ = create_criterion_and_optimizer(model, args.lr)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False)
+    test_loader = DataLoader(
+        test_set, batch_size=args.batch_size, shuffle=False, num_workers=10
+    )
     test_loss, test_acc, test_preds, test_labels = evaluate_one_epoch(
         model, criterion, test_loader
     )
