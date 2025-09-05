@@ -1,5 +1,5 @@
 import torch.nn as nn
-from ..kan_lib.KANConv import KAN_Convolutional_Layer
+from .kan_lib.KANConv import KAN_Convolutional_Layer
 
 
 class CKAN(nn.Module):
