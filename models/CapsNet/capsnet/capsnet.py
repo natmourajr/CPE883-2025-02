@@ -164,22 +164,46 @@ def plot_sample_predictions(
 
 
 def test(model, test_loader, args):
+    import seaborn as sns
+    from sklearn.metrics import confusion_matrix
+
     model.eval()
     test_loss = 0
     correct = 0
+    all_preds = []
+    all_labels = []
     for x, y in test_loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        y = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
-            1, y.to(DEVICE).view(-1, 1), 1.0
+        y_onehot = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
+            1, y.view(-1, 1), 1.0
         )
         with torch.no_grad():
             y_pred, x_recon = model(x)
-        test_loss += caps_loss(y, y_pred, x, x_recon, args.lam_recon).item() * x.size(0)
-        y_pred = y_pred.max(1)[1]
-        y_true = y.max(1)[1]
-        correct += y_pred.eq(y_true).cpu().sum()
+        test_loss += caps_loss(
+            y_onehot, y_pred, x, x_recon, args.lam_recon
+        ).item() * x.size(0)
+        y_pred_label = y_pred.max(1)[1]
+        correct += y_pred_label.eq(y).cpu().sum()
+        all_preds.extend(y_pred_label.cpu().numpy())
+        all_labels.extend(y.cpu().numpy())
 
     test_loss /= len(test_loader.dataset)
+
+    # Confusion matrix
+    try:
+        cm = confusion_matrix(all_labels, all_preds)
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+        plt.title("Confusion Matrix - Test Set")
+        if hasattr(args, "save_dir") and args.save_dir:
+            os.makedirs(args.save_dir, exist_ok=True)
+            plt.savefig(os.path.join(args.save_dir, "confusion_matrix_test.png"))
+        plt.close()
+    except Exception as e:
+        print(f"Could not save confusion matrix: {e}")
+
     return test_loss, correct / len(test_loader.dataset)
 
 
