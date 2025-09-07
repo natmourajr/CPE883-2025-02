@@ -44,6 +44,12 @@ def parse_args():
         help="Random seed for initialization",
     )
     parser.add_argument(
+        "--test",
+        default=1,
+        type=int,
+        help="test?",
+    )
+    parser.add_argument(
         "--model",
         default="resnet",
         type=str,
@@ -214,114 +220,126 @@ def main():
     fold_accuracies, fold_loss = [], []
     patience = 5
 
-    # Prepare CSV logging for fold metrics
-    csv_dir = f"result/{args.model}"
-    os.makedirs(csv_dir, exist_ok=True)
-    csv_path = f"{csv_dir}/fold_metrics.csv"
-    if not os.path.exists(csv_path):
-        with open(csv_path, "w", newline="") as csvfile:
-            fieldnames = ["fold", "best_val_acc", "best_val_loss", "train_time_s"]
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
+    if args.test != 1:
+        # Prepare CSV logging for fold metrics
+        csv_dir = f"result/{args.model}"
+        os.makedirs(csv_dir, exist_ok=True)
+        csv_path = f"{csv_dir}/fold_metrics.csv"
+        if not os.path.exists(csv_path):
+            with open(csv_path, "w", newline="") as csvfile:
+                fieldnames = ["fold", "best_val_acc", "best_val_loss", "train_time_s"]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
 
-    for fold, (train_idx, val_idx) in enumerate(
-        skf.split(np.zeros(len(targets)), targets)
-    ):
-        fold_start_time = time()
-        # Reset optimizer and scheduler for each fold
-        model = create_model(args.model)
-        criterion, optimizer, scheduler = create_criterion_and_optimizer(model, args.lr)
-        train_subset = Subset(train_set, train_idx)
-        val_subset = Subset(train_set, val_idx)
-        train_loader = DataLoader(
-            train_subset, batch_size=args.batch_size, shuffle=True, num_workers=8
-        )
-        val_loader = DataLoader(
-            val_subset, batch_size=args.batch_size, shuffle=False, num_workers=8
-        )
-        best_val_acc = float("-inf")
-        best_val_loss = float("inf")
-        best_state_dict = None
-        patience_counter = 0
-        train_losses, train_accs = [], []
-        val_losses, val_accs = [], []
-
-        # Training loop per fold
-        for epoch in range(args.epochs):
-            model.train()
-
-            train_loss, train_acc = train_one_epoch(
-                model, criterion, optimizer, train_loader, epoch, args.epochs
+        for fold, (train_idx, val_idx) in enumerate(
+            skf.split(np.zeros(len(targets)), targets)
+        ):
+            fold_start_time = time()
+            # Reset optimizer and scheduler for each fold
+            model = create_model(args.model)
+            criterion, optimizer, scheduler = create_criterion_and_optimizer(
+                model, args.lr
             )
-            train_losses.append(train_loss)
-            train_accs.append(train_acc)
+            train_subset = Subset(train_set, train_idx)
+            val_subset = Subset(train_set, val_idx)
+            train_loader = DataLoader(
+                train_subset, batch_size=args.batch_size, shuffle=True, num_workers=8
+            )
+            val_loader = DataLoader(
+                val_subset, batch_size=args.batch_size, shuffle=False, num_workers=8
+            )
+            best_val_acc = float("-inf")
+            best_val_loss = float("inf")
+            best_state_dict = None
+            patience_counter = 0
+            train_losses, train_accs = [], []
+            val_losses, val_accs = [], []
 
-            val_loss, val_acc, _, _ = evaluate_one_epoch(model, criterion, val_loader)
-            val_losses.append(val_loss)
-            val_accs.append(val_acc)
+            # Training loop per fold
+            for epoch in range(args.epochs):
+                model.train()
+
+                train_loss, train_acc = train_one_epoch(
+                    model, criterion, optimizer, train_loader, epoch, args.epochs
+                )
+                train_losses.append(train_loss)
+                train_accs.append(train_acc)
+
+                val_loss, val_acc, _, _ = evaluate_one_epoch(
+                    model, criterion, val_loader
+                )
+                val_losses.append(val_loss)
+                val_accs.append(val_acc)
+
+                print(
+                    f"==> fold {fold}, epoch {epoch:02d}: loss={train_loss:.5f}, "
+                    f"val_loss={val_loss:.5f}, val_acc={val_acc:.4f}"
+                )
+
+                scheduler.step()
+
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    best_state_dict = copy.deepcopy(model.state_dict())
+                    print(f"best val_acc increased to {best_val_acc:.4f}")
+                else:
+                    patience_counter += 1
+                    print(
+                        f"No improvement in validation loss."
+                        f" Patience: {patience_counter}/{patience}"
+                    )
+                    if patience_counter >= patience:
+                        print("Early stopping triggered.")
+                        break
+
+            # Save only the best model for this fold
+            os.makedirs("checkpoints", exist_ok=True)
+            print(
+                f"Saving best model for fold {fold} (best_val_acc={best_val_acc:.4f}) ..."
+            )
+            if best_state_dict is not None:
+                torch.save(
+                    best_state_dict,
+                    f"checkpoints/fold_{fold}.pkl",
+                )
+            else:
+                print(f"Warning: No best_state_dict found for fold {fold}!")
+
+            # Save curves
+            plot_curves(
+                train_losses, train_accs, val_losses, val_accs, fold, args.model
+            )
+            plt.close("all")
 
             print(
-                f"==> fold {fold}, epoch {epoch:02d}: loss={train_loss:.5f}, "
-                f"val_loss={val_loss:.5f}, val_acc={val_acc:.4f}"
+                f"Fold {fold}: Best Val Acc: {best_val_acc:.4f}, Best Val Loss: {best_val_loss:.4f}"
             )
 
-            scheduler.step()
-
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                best_val_loss = val_loss
-                patience_counter = 0
-                best_state_dict = copy.deepcopy(model.state_dict())
-                print(f"best val_acc increased to {best_val_acc:.4f}")
-            else:
-                patience_counter += 1
-                print(
-                    f"No improvement in validation loss."
-                    f" Patience: {patience_counter}/{patience}"
+            # Save fold metrics
+            fold_accuracies.append(best_val_acc)
+            fold_loss.append(best_val_loss)
+            fold_time = time() - fold_start_time
+            # Append metrics to CSV
+            with open(csv_path, "a", newline="") as csvfile:
+                writer = csv.DictWriter(
+                    csvfile,
+                    fieldnames=[
+                        "fold",
+                        "best_val_acc",
+                        "best_val_loss",
+                        "train_time_s",
+                    ],
                 )
-                if patience_counter >= patience:
-                    print("Early stopping triggered.")
-                    break
-
-        # Save only the best model for this fold
-        os.makedirs("checkpoints", exist_ok=True)
-        print(
-            f"Saving best model for fold {fold} (best_val_acc={best_val_acc:.4f}) ..."
-        )
-        if best_state_dict is not None:
-            torch.save(
-                best_state_dict,
-                f"checkpoints/fold_{fold}.pkl",
-            )
-        else:
-            print(f"Warning: No best_state_dict found for fold {fold}!")
-
-        # Save curves
-        plot_curves(train_losses, train_accs, val_losses, val_accs, fold, args.model)
-        plt.close("all")
-
-        print(
-            f"Fold {fold}: Best Val Acc: {best_val_acc:.4f}, Best Val Loss: {best_val_loss:.4f}"
-        )
-
-        # Save fold metrics
-        fold_accuracies.append(best_val_acc)
-        fold_loss.append(best_val_loss)
-        fold_time = time() - fold_start_time
-        # Append metrics to CSV
-        with open(csv_path, "a", newline="") as csvfile:
-            writer = csv.DictWriter(
-                csvfile,
-                fieldnames=["fold", "best_val_acc", "best_val_loss", "train_time_s"],
-            )
-            writer.writerow(
-                {
-                    "fold": fold,
-                    "best_val_acc": best_val_acc,
-                    "best_val_loss": best_val_loss,
-                    "train_time_s": fold_time,
-                }
-            )
+                writer.writerow(
+                    {
+                        "fold": fold,
+                        "best_val_acc": best_val_acc,
+                        "best_val_loss": best_val_loss,
+                        "train_time_s": fold_time,
+                    }
+                )
 
     print("Training complete, starting evaluation. ")
 
