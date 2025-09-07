@@ -2,7 +2,7 @@ import torch
 import copy
 import torch.nn as nn
 import torch.optim as optim
-from cifar_dataloaders import CIFAR10Dataset
+from cifar_dataloaders import CIFAR10Dataset, CIFAR100Dataset
 from CKAN import CKAN
 from torch.utils.data import Subset, DataLoader
 from sklearn.model_selection import StratifiedKFold
@@ -69,21 +69,32 @@ def parse_args():
         type=int,
         help="The number of folds for cross-validation",
     )
+    parser.add_argument(
+        "--cifar_type",
+        default="10",
+        type=str,
+        choices=["10", "100"],
+        help="CIFAR dataset to use",
+    )
 
     args = parser.parse_args()
     return args
 
 
-def load_cifar10(path="../../../datasets/cifar10", model_type="vit"):
+def load_cifar(cifar_type="10", path="../../../datasets/cifar10", model_type="vit"):
     # kwargs = {"num_workers": 1, "pin_memory": True}
 
     if model_type == "vit":
         transform = transforms.Resize(384)
     else:
         transform = None
+    if cifar_type == "10":
+        train_set = CIFAR10Dataset(root=path, train=True, transform=transform)
+        test_set = CIFAR10Dataset(root=path, train=False, transform=transform)
+    if cifar_type == "100":
+        train_set = CIFAR100Dataset(root=path, train=True, transform=transform)
+        test_set = CIFAR100Dataset(root=path, train=False, transform=transform)
 
-    train_set = CIFAR10Dataset(root=path, train=True, transform=transform)
-    test_set = CIFAR10Dataset(root=path, train=False, transform=transform)
     return train_set, test_set
 
 
@@ -214,7 +225,9 @@ def main():
     args = parse_args()
     set_seeds(args.seed)
 
-    train_set, test_set = load_cifar10(args.data_dir, model_type=args.model)
+    train_set, test_set = load_cifar(
+        cifar_type=args.cifar_type, path=args.data_dir, model_type=args.model
+    )
     targets = np.array(train_set.targets)
     skf = StratifiedKFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
     fold_accuracies, fold_loss = [], []

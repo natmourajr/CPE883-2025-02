@@ -2,13 +2,15 @@
 #!/bin/bash
 
 # Default values
-EPOCHS=50
+EPOCHS=100
 BATCH_SIZE=100
 LR=0.005
 WEIGHTS=""
 FOLDS=5
 DATA_DIR="/home/eduardo/doc/CPE883-2025-02/datasets/cifar10/"
-MODEL="vit"
+MODEL="resnet"
+TEST=0
+CIFAR_TYPE="10"
 
 # Parse arguments
 while [[ "$#" -gt 0 ]]; do
@@ -37,6 +39,14 @@ while [[ "$#" -gt 0 ]]; do
 			DATA_DIR="$2"
 			shift 2
 			;;
+		--test)
+			TEST=1
+			shift
+			;;
+		--cifar_type)
+			CIFAR_TYPE="$2"
+			shift 2
+			;;
 		--model)
 			MODEL="$2"
 			shift 2
@@ -47,7 +57,7 @@ while [[ "$#" -gt 0 ]]; do
 	esac
 done
 
-CMD="python3 runner.py --epochs $EPOCHS --batch_size $BATCH_SIZE --lr $LR --folds $FOLDS --data_dir $DATA_DIR --model $MODEL"
+CMD="python3 runner.py --epochs $EPOCHS --batch_size $BATCH_SIZE --lr $LR --folds $FOLDS --data_dir $DATA_DIR --model $MODEL --cifar_type $CIFAR_TYPE --test $TEST"
 if [[ -n "$WEIGHTS" ]]; then
 	CMD+=" --weights $WEIGHTS"
 fi
