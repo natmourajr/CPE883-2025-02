@@ -302,7 +302,7 @@ def main():
             if best_state_dict is not None:
                 torch.save(
                     best_state_dict,
-                    f"checkpoints/fold_{fold}.pkl",
+                    f"checkpoints/{args.model}/fold_{fold}.pkl",
                 )
             else:
                 print(f"Warning: No best_state_dict found for fold {fold}!")
@@ -357,7 +357,7 @@ def main():
     )
     # load best fold and evaluate over test_set
     model = create_model(args.model)
-    model.load_state_dict(torch.load(f"checkpoints/fold_{best_fold}.pkl"))
+    model.load_state_dict(torch.load(f"checkpoints/{args.model}/fold_{best_fold}.pkl"))
     criterion, _, _ = create_criterion_and_optimizer(model, args.lr)
     test_loader = DataLoader(
         test_set, batch_size=args.batch_size, shuffle=False, num_workers=8
