@@ -16,6 +16,8 @@ from scipy.signal import periodogram
 from sklearn.preprocessing import RobustScaler
 from sklearn.cluster import KMeans
 import itertools
+import pickle
+from copy import deepcopy
 
 
 def _acf_1d(x: np.ndarray, max_lag: int) -> np.ndarray:
@@ -121,6 +123,133 @@ class UnsupervisedStateSegmenter:
         np.random.seed(self.random_state)
         torch.manual_seed(self.random_state)
 
+    # ---------------- NEW: Serialização em memória ----------------
+    def to_state_dict(self) -> Dict:
+        """Exporta todo o estado necessário para inferência."""
+        if not self.is_trained():
+            raise RuntimeError("Modelo não está treinado/carregado; execute fit() ou load() antes de salvar.")
+
+        # Serializar scaler (classe + hiperparâmetros + estatísticas)
+        scaler_state = {
+            "class": "RobustScaler",
+            "params": self.scaler_.get_params(),
+            "center_": deepcopy(getattr(self.scaler_, "center_", None)),
+            "scale_":  deepcopy(getattr(self.scaler_, "scale_",  None)),
+            "n_features_in_": int(getattr(self.scaler_, "n_features_in_", len(self.feature_names_ or []))),
+        }
+
+        # Serializar FeatureConfig (usável para reconstrução)
+        fc = self.feature_conf
+        feature_conf_state = {
+            "acf_lags": int(fc.acf_lags),
+            "bands": deepcopy(fc.bands),
+            "fs": float(fc.fs),
+        }
+
+        # Tensores -> numpy
+        def t2n(t: torch.Tensor) -> np.ndarray:
+            return t.detach().cpu().numpy()
+
+        state = {
+            "init_params": {
+                "k_states": self.k,
+                "window": self.w,
+                "step": self.step,
+                "min_slice_windows": self.min_slice,
+                "max_iter": self.max_iter,
+                "tol": self.tol,
+                "cov_type": self.cov_type,
+                "anomaly_strategy": self.anomaly_strategy,
+                "feature_conf": feature_conf_state,
+                "device": str(self.device),        # apenas para informação
+                "random_state": self.random_state,
+            },
+            "scaler_state": scaler_state,
+            "mu": t2n(self.mu_),
+            "var": t2n(self.var_),
+            "pi": t2n(self.pi_),
+            "A":  t2n(self.A_),
+            "loglik": deepcopy(self.loglik_),
+            "anomaly_state": int(self.anomaly_state_),
+            "feature_names": deepcopy(self.feature_names_),
+        }
+        return state
+
+    @classmethod
+    def from_state_dict(cls, state: Dict, map_location: str = "cpu") -> "UnsupervisedStateSegmenter":
+        """Restaura uma instância completamente pronta para inferência a partir de um state dict."""
+        ip = state["init_params"]
+        # Reconstruir FeatureConfig
+        fc_s = ip["feature_conf"]
+        feature_conf = FeatureConfig(
+            acf_lags=int(fc_s["acf_lags"]),
+            bands=deepcopy(fc_s["bands"]),
+            fs=float(fc_s["fs"]),
+        )
+
+        # Criar instância (device pode ser sobrescrito depois)
+        inst = cls(
+            k_states=int(ip["k_states"]),
+            window=int(ip["window"]),
+            step=int(ip["step"]),
+            min_slice_windows=int(ip["min_slice_windows"]),
+            max_iter=int(ip["max_iter"]),
+            tol=float(ip["tol"]),
+            cov_type=ip["cov_type"],
+            anomaly_strategy=ip["anomaly_strategy"],
+            feature_conf=feature_conf,
+            device=map_location,                     # escolhemos o device de restauração
+            random_state=int(ip["random_state"]),
+        )
+
+        # Restaurar scaler
+        scs = state["scaler_state"]
+        scaler = RobustScaler(**scs["params"])
+        # Forçar atributos de fitted:
+        scaler.center_ = np.asarray(scs["center_"]) if scs["center_"] is not None else None
+        scaler.scale_  = np.asarray(scs["scale_"])  if scs["scale_"]  is not None else None
+        # Ajustar n_features_in_ para evitar warnings/erros no transform
+        scaler.n_features_in_ = int(scs.get("n_features_in_", len(state.get("feature_names", []) or [])))
+        inst.scaler_ = scaler
+
+        # Restaurar tensores no device alvo
+        dev = torch.device(map_location)
+        inst.mu_  = torch.as_tensor(state["mu"],  dtype=torch.float32, device=dev)
+        inst.var_ = torch.as_tensor(state["var"], dtype=torch.float32, device=dev)
+        inst.pi_  = torch.as_tensor(state["pi"],  dtype=torch.float32, device=dev)
+        inst.A_   = torch.as_tensor(state["A"],   dtype=torch.float32, device=dev)
+
+        inst.loglik_ = list(state.get("loglik", []))
+        inst.anomaly_state_ = int(state["anomaly_state"])
+        inst.feature_names_ = list(state["feature_names"])
+        inst.device = dev
+        return inst
+
+    # ---------------- NEW: Persistência em disco ----------------
+    def save(self, path: str) -> None:
+        """Salva o estado pronto para inferência em disco (pickle)."""
+        state = self.to_state_dict()
+        with open(path, "wb") as f:
+            pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @classmethod
+    def load(cls, path: str, map_location: str = "cpu") -> "UnsupervisedStateSegmenter":
+        """Carrega o estado salvo e retorna uma instância pronta para predict."""
+        with open(path, "rb") as f:
+            state = pickle.load(f)
+        return cls.from_state_dict(state, map_location=map_location)
+
+    def is_trained(self) -> bool:
+        """Retorna True se o modelo está pronto para prever (fit ou load)."""
+        return (
+            self.scaler_ is not None and
+            self.mu_ is not None and
+            self.var_ is not None and
+            self.pi_ is not None and
+            self.A_ is not None and
+            self.feature_names_ is not None and
+            self.anomaly_state_ is not None
+        )
     # ---------- Public API ----------
 
     def fit(self, series: np.ndarray) -> "UnsupervisedStateSegmenter":
@@ -134,6 +263,10 @@ class UnsupervisedStateSegmenter:
         return self
 
     def predict(self, series: np.ndarray) -> Dict[str, np.ndarray]:
+        # --------- NEW: garantir que há estado carregado/treinado ---------
+        if not self.is_trained():
+            raise RuntimeError("Modelo não está pronto para inferência. Chame fit() ou load() antes de predict().")
+
         X, idx = self._build_windows(series)
         F = self._extract_features(X)
         Fz = self._scale(F, fit=False)
@@ -144,18 +277,23 @@ class UnsupervisedStateSegmenter:
         anomaly_mask = (z == self.anomaly_state_).astype(int)
         slices = self._build_slices(z)
         slices = self._enforce_min_dwell(slices)
+        states = []
+        for i,v in enumerate(idx):
+            states += [z[i]] * (v[1] - v[0])
+        states = np.array(states, dtype=int)
         return {
             "window_indices": np.array(idx, dtype=int),
             "features": F,
             "features_z": Fz.cpu().numpy(),
-            "states": z,
+            "states": states,
+            "states_per_window": z,
             "loglike_per_window": ll,
             "anomaly_state": np.array([self.anomaly_state_]),
             "anomaly_mask": anomaly_mask,
             "slices": np.array(slices, dtype=int),
             "feature_names": np.array(self.feature_names_),
         }
-
+    
     # ---------- Windowing & Features ----------
 
     def _build_windows(self, series: np.ndarray) -> Tuple[np.ndarray, List[Tuple[int, int]]]:
