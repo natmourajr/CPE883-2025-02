@@ -25,7 +25,6 @@ import torchvision.transforms as transforms
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
-NUM_CLASSES = 10
 
 
 def parse_args():
@@ -82,7 +81,7 @@ def parse_args():
 
 
 def load_cifar(cifar_type="10", path="../../../datasets/cifar10", model_type="vit"):
-    # kwargs = {"num_workers": 1, "pin_memory": True}
+    n_classes = 10 if cifar_type == "10" else 100
 
     if model_type == "vit":
         transform = transforms.Resize(384)
@@ -94,8 +93,10 @@ def load_cifar(cifar_type="10", path="../../../datasets/cifar10", model_type="vi
     if cifar_type == "100":
         train_set = CIFAR100Dataset(root=path, train=True, transform=transform)
         test_set = CIFAR100Dataset(root=path, train=False, transform=transform)
+    else:
+        raise ValueError("cifar_type must be '10' or '100'")
 
-    return train_set, test_set
+    return train_set, test_set, n_classes
 
 
 def create_model(model_type, n_classes=10):
@@ -225,7 +226,7 @@ def main():
     args = parse_args()
     set_seeds(args.seed)
 
-    train_set, test_set = load_cifar(
+    train_set, test_set, n_classes = load_cifar(
         cifar_type=args.cifar_type, path=args.data_dir, model_type=args.model
     )
     targets = np.array(train_set.targets)
@@ -249,7 +250,7 @@ def main():
         ):
             fold_start_time = time()
             # Reset optimizer and scheduler for each fold
-            model = create_model(args.model)
+            model = create_model(args.model, n_classes=n_classes)
             criterion, optimizer, scheduler = create_criterion_and_optimizer(
                 model, args.lr
             )
