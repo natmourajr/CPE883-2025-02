@@ -370,7 +370,7 @@ def main():
         f"Best Fold: {best_fold}, Best Val Acc: {fold_accuracies[best_fold]:.4f}, Best Val Loss: {fold_loss[best_fold]:.4f}"
     )
     # load best fold and evaluate over test_set
-    model = create_model(args.model)
+    model = create_model(args.model, n_classes=n_classes)
     model.load_state_dict(torch.load(f"checkpoints/{args.model}/fold_{best_fold}.pkl"))
     criterion, _, _ = create_criterion_and_optimizer(model, args.lr)
     test_loader = DataLoader(
