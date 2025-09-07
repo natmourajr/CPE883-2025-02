@@ -332,6 +332,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
                 model.state_dict(), args.save_dir + f"/epoch{epoch}_fold{fold_n}.pkl"
             )
             print(f"best val_acc increased to {best_val_acc:.4f}")
+            patience_counter = 0
         else:
             patience_counter += 1
             print(
