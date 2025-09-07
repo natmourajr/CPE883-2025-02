@@ -295,7 +295,7 @@ def main():
                         break
 
             # Save only the best model for this fold
-            os.makedirs("checkpoints", exist_ok=True)
+            os.makedirs(f"checkpoints/{args.model}", exist_ok=True)
             print(
                 f"Saving best model for fold {fold} (best_val_acc={best_val_acc:.4f}) ..."
             )
