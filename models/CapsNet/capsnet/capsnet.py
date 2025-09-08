@@ -277,7 +277,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
             tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
         ):  # batch training
             x, y = x.to(DEVICE), y.to(DEVICE)
-            y = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
+            y = torch.zeros(y.size(0), classes, device=DEVICE).scatter_(
                 1, y.view(-1, 1), 1.0
             )
 
