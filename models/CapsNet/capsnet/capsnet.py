@@ -211,6 +211,7 @@ def run_kfold(dataset, model, args, k=5, shuffle=True):
     targets = np.array(dataset.targets)
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=11)
     classes = dataset.classes
+    n_classes = len(classes)
     fold_accuracies = []
     fold_loss = []
     for fold, (train_idx, val_idx) in enumerate(
@@ -242,7 +243,7 @@ def run_kfold(dataset, model, args, k=5, shuffle=True):
     return
 
 
-def train(model, train_loader, val_loader, args, fold_n, classes):
+def train(model, train_loader, val_loader, args, fold_n, classes, n_classes):
     """
     Training a CapsuleNet
     :param model: the CapsuleNet model
@@ -277,7 +278,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
             tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
         ):  # batch training
             x, y = x.to(DEVICE), y.to(DEVICE)
-            y = torch.zeros(y.size(0), classes, device=DEVICE).scatter_(
+            y = torch.zeros(y.size(0), n_classes, device=DEVICE).scatter_(
                 1, y.view(-1, 1), 1.0
             )
 
