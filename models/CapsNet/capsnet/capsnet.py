@@ -50,23 +50,15 @@ class CapsuleNet(nn.Module):
 
         # Layer 1: Just a conventional Conv2D layer
         self.conv1 = nn.Conv2d(input_size[0], 256, kernel_size=9, stride=1, padding=0)
-        self.relu = nn.ReLU()
 
         # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_caps, dim_caps]
         self.primarycaps = PrimaryCapsule(
             256, 256, 8, kernel_size=9, stride=2, padding=0
         )
 
-        # Dynamically determine in_num_caps for DenseCapsule
-        with torch.no_grad():
-            dummy = torch.zeros(1, *input_size)
-            out = self.relu(self.conv1(dummy))
-            out = self.primarycaps(out)
-            in_num_caps = out.shape[1]
-
         # Layer 3: Capsule layer. Routing algorithm works here.
         self.digitcaps = DenseCapsule(
-            in_num_caps=in_num_caps,
+            in_num_caps=32 * 8 * 8,  # 32 channels, 8x8 spatial size after convs
             in_dim_caps=8,
             out_num_caps=classes,
             out_dim_caps=16,
@@ -89,6 +81,7 @@ class CapsuleNet(nn.Module):
         device = x.device
         x = self.relu(self.conv1(x))
         x = self.primarycaps(x)
+        print("PrimaryCapsule output shape:", x.shape)
         x = self.digitcaps(x)
         length = x.norm(dim=-1)
         if y is None:
