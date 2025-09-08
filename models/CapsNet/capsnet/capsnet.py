@@ -56,9 +56,16 @@ class CapsuleNet(nn.Module):
             256, 256, 8, kernel_size=9, stride=2, padding=0
         )
 
+        # Dynamically determine in_num_caps for DenseCapsule
+        with torch.no_grad():
+            dummy = torch.zeros(1, *input_size)
+            out = self.relu(self.conv1(dummy))
+            out = self.primarycaps(out)
+            in_num_caps = out.shape[1]
+
         # Layer 3: Capsule layer. Routing algorithm works here.
         self.digitcaps = DenseCapsule(
-            in_num_caps=32 * 8 * 8,  # 32 channels, 8x8 spatial size after convs
+            in_num_caps=in_num_caps,
             in_dim_caps=8,
             out_num_caps=classes,
             out_dim_caps=16,
