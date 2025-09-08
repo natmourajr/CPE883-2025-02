@@ -84,8 +84,7 @@ class CapsuleNet(nn.Module):
         with torch.no_grad():
             dummy_input = torch.zeros(1, 3, 32, 32)
             x = self.pool(F.relu(self.conv1(dummy_input)))
-            x = self.pool(F.relu(self.conv2(x)))
-            x = self.primary_caps(x)
+            x = self.primarycaps(x)
             print(
                 f"Número de cápsulas primárias calculado com a nova arquitetura: {x.size(1)}"
             )
