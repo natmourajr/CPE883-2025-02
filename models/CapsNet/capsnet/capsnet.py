@@ -212,6 +212,7 @@ def run_kfold(dataset, model, args, k=5, shuffle=True):
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=11)
     classes = dataset.classes
     n_classes = len(classes)
+    print(f"Classes: {classes}, Number of classes: {n_classes}")
     fold_accuracies = []
     fold_loss = []
     for fold, (train_idx, val_idx) in enumerate(
@@ -224,7 +225,7 @@ def run_kfold(dataset, model, args, k=5, shuffle=True):
         )
         val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
         best_val_acc, best_val_loss = train(
-            model, train_loader, val_loader, args, fold, classes
+            model, train_loader, val_loader, args, fold, classes, n_classes
         )
         fold_accuracies.append(best_val_acc)
         fold_loss.append(best_val_loss)
