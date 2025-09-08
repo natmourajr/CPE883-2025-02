@@ -18,8 +18,6 @@ import csv
 from time import time
 from torchvision.models import resnet50, ResNet50_Weights
 from torchvision.models import vit_b_16, ViT_B_16_Weights
-
-
 import torchvision.transforms as transforms
 
 
