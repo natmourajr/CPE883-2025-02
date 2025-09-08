@@ -27,6 +27,7 @@ import os
 from torch.utils.data import Subset, DataLoader
 from sklearn.model_selection import StratifiedKFold
 from tqdm import tqdm
+import torch.nn.functional as F
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -50,15 +51,17 @@ class CapsuleNet(nn.Module):
 
         # Layer 1: Just a conventional Conv2D layer
         self.conv1 = nn.Conv2d(input_size[0], 256, kernel_size=9, stride=1, padding=0)
-
+        self.pool = nn.MaxPool2d(2, 2)
         # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_caps, dim_caps]
         self.primarycaps = PrimaryCapsule(
             256, 256, 8, kernel_size=9, stride=2, padding=0
         )
 
+        in_num_caps = self._get_primary_caps_output_size()
+
         # Layer 3: Capsule layer. Routing algorithm works here.
         self.digitcaps = DenseCapsule(
-            in_num_caps=32 * 8 * 8,  # 32 channels, 8x8 spatial size after convs
+            in_num_caps=in_num_caps,  # 32 channels, 8x8 spatial size after convs
             in_dim_caps=8,
             out_num_caps=classes,
             out_dim_caps=16,
@@ -77,9 +80,20 @@ class CapsuleNet(nn.Module):
 
         self.relu = nn.ReLU()
 
+    def _get_primary_caps_output_size(self):
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 3, 32, 32)
+            x = self.pool(F.relu(self.conv1(dummy_input)))
+            x = self.pool(F.relu(self.conv2(x)))
+            x = self.primary_caps(x)
+            print(
+                f"Número de cápsulas primárias calculado com a nova arquitetura: {x.size(1)}"
+            )
+            return x.size(1)
+
     def forward(self, x, y=None):
         device = x.device
-        x = self.relu(self.conv1(x))
+        x = self.pool(self.relu(self.conv1(x)))
         x = self.primarycaps(x)
         print("PrimaryCapsule output shape:", x.shape)
         x = self.digitcaps(x)
