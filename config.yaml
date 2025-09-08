@@ -17,7 +17,8 @@ cross_validation:
 # 2. PARÂMETROS DE PRÉ-PROCESSAMENTO
 # ===================================================================
 preprocessing:
-  image_size: 128
+  image_size: 224 # ViT
+  #image_size: 128 # Demais modelos
 
 # ===================================================================
 # 3. PARÂMETROS DE TREINAMENTO

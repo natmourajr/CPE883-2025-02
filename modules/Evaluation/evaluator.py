@@ -310,9 +310,16 @@ def run_kfold_evaluation(model_class, model_name, config, experiment_dir, dev_in
         iterator = tqdm(holdout_loader, desc="  Avaliação Final no Hold-Out", unit="batch")
         for data, metadata_batch in iterator:
             data = data.to(device)
-            # Adapte para CapsNet se necessário
-            outputs = final_model(data)
-            probabilities = F.softmax(outputs, dim=1)[:, 1]
+            if "CapsNet" in model_name:
+                # A CapsNet retorna uma tupla (predições, reconstrução)
+                # Durante a inferência, só nos importam as predições (primeiro elemento)
+                outputs, _ = final_model(data)
+                # A saída da CapsNet já representa a probabilidade (norma do vetor)
+                probabilities = outputs[:, 1]
+            else:
+                # Para ResNet, CKAN, etc., que retornam um único tensor de logits
+                outputs = final_model(data)
+                probabilities = F.softmax(outputs, dim=1)[:, 1]
             holdout_probs.extend(probabilities.cpu().numpy())
             for i in range(len(data)):
                 holdout_metadata.append({
