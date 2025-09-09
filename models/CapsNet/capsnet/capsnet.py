@@ -50,21 +50,17 @@ class CapsuleNet(nn.Module):
         self.routings = routings
 
         # Layer 1: Just a conventional Conv2D layer
-        self.conv1 = nn.Conv2d(
-            input_size[0], input_size[1], kernel_size=3, stride=2, padding=1
-        )
+        self.conv1 = nn.Conv2d(input_size[0], 256, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(
-            in_channels=input_size[1],
-            out_channels=input_size[1] * 2,
+            in_channels=256,
+            out_channels=64,
             kernel_size=3,
             stride=1,
             padding=1,
         )
 
         # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_caps, dim_caps]
-        self.primarycaps = PrimaryCapsule(
-            input_size[1] * 2, 64, 8, kernel_size=5, stride=2, padding=0
-        )
+        self.primarycaps = PrimaryCapsule(64, 64, 8, kernel_size=5, stride=2, padding=0)
 
         in_num_caps = self._get_primary_caps_output_size()
 
