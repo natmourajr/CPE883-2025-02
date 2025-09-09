@@ -50,7 +50,9 @@ class CapsuleNet(nn.Module):
         self.routings = routings
 
         # Layer 1: Just a conventional Conv2D layer
-        self.conv1 = nn.Conv2d(input_size[0], 256, kernel_size=3, stride=2, padding=1)
+        self.conv1 = nn.Conv2d(
+            input_size[0], input_size[1], kernel_size=3, stride=2, padding=1
+        )
         self.conv2 = nn.Conv2d(
             in_channels=input_size[1],
             out_channels=input_size[1] * 2,
