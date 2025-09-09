@@ -51,9 +51,17 @@ class CapsuleNet(nn.Module):
 
         # Layer 1: Just a conventional Conv2D layer
         self.conv1 = nn.Conv2d(input_size[0], 256, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(
+            in_channels=input_size[1],
+            out_channels=input_size[1] * 2,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
+
         # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_caps, dim_caps]
         self.primarycaps = PrimaryCapsule(
-            256, 256, 8, kernel_size=9, stride=2, padding=0
+            input_size[1] * 2, 64, 8, kernel_size=5, stride=2, padding=0
         )
 
         in_num_caps = self._get_primary_caps_output_size()
@@ -82,18 +90,18 @@ class CapsuleNet(nn.Module):
     def _get_primary_caps_output_size(self):
         with torch.no_grad():
             dummy_input = torch.zeros(1, 3, 32, 32)
+            # Passa pelo novo frontend sem pooling
             x = F.relu(self.conv1(dummy_input))
+            x = F.relu(self.conv2(x))
             x = self.primarycaps(x)
-            print(
-                f"Número de cápsulas primárias calculado com a arquitetura original: {x.size(1)}"
-            )
+            print(f"Número de cápsulas (stride): {x.size(1)}")
             return x.size(1)
 
     def forward(self, x, y=None):
         device = x.device
-        x = self.relu(self.conv1(x))
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
         x = self.primarycaps(x)
-        print("PrimaryCapsule output shape:", x.shape)
         x = self.digitcaps(x)
         length = x.norm(dim=-1)
         if y is None:
