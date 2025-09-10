@@ -26,7 +26,7 @@ def load_cifar(
         test_set = CIFAR100Dataset(
             root=path, train=False, transform=transform, superclass=False
         )
-    if class_type == "superclass" and cifar_type == "100":
+    elif class_type == "superclass" and cifar_type == "100":
         n_classes = 20
         train_set = CIFAR100Dataset(
             root=path, train=True, transform=transform, superclass=True
@@ -34,7 +34,7 @@ def load_cifar(
         test_set = CIFAR100Dataset(
             root=path, train=False, transform=transform, superclass=True
         )
-    if cifar_type == "10":
+    elif cifar_type == "10":
         train_set = CIFAR10Dataset(root=path, train=True, transform=transform)
         test_set = CIFAR10Dataset(root=path, train=False, transform=transform)
         n_classes = 10
