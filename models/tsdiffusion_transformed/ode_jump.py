@@ -6,78 +6,60 @@ from torch.utils.data import Subset, TensorDataset, DataLoader, WeightedRandomSa
 import numpy as np 
 max_drop = 0.7
 TS_SPAN = 60 * 60 * 24 * 365
-from sklearn.model_selection import TimeSeriesSplit, StratifiedGroupKFold
+from sklearn.model_selection import StratifiedShuffleSplit  # manter se já importou, usamos só p/ seed-size; NÃO estratifica tempo
 
 # ---------- Helpers privados ----------
-def _window_starts_and_count(n_rows: int, window_size: int, window_step: int):
-    if window_size is None or window_size >= n_rows:
-        starts = np.array([0], dtype=int)
-        n_ws = 1
+
+def _split_counts(n, train_frac, val_frac, test_frac, validate):
+    # contas base (arredonda e corrige sobra/falta)
+    if validate:
+        raw = np.array([train_frac, val_frac, test_frac], dtype=float)
     else:
-        starts = np.arange(0, n_rows - window_size + 1, window_step, dtype=int)
-        n_ws = len(starts)
-    return starts, n_ws
+        raw = np.array([train_frac + val_frac, 0.0, test_frac], dtype=float)  # 80/0/20
 
-def _groups_non_overlap_from_starts(starts: np.ndarray, G: int):
-    """Gera ids de grupo sem sobreposição (cada janela fica em um bloco de tamanho G)."""
-    return (starts // G).astype(int)
+    k = raw / max(raw.sum(), 1e-8)
+    counts = np.floor(k * n).astype(int)
+    # distribui sobras para atingir n
+    while counts.sum() < n:
+        # dá 1 para o maior "gap" relativo (quase sempre treino)
+        gaps = k * n - counts
+        j = int(np.argmax(gaps))
+        counts[j] += 1
+    # se passou (por arredondamento), tira de quem tem mais
+    while counts.sum() > n:
+        j = int(np.argmax(counts))
+        counts[j] -= 1
+    # garante não-negativos
+    counts = np.maximum(counts, 0)
+    if validate:
+        n_train, n_val, n_test = counts.tolist()
+        # tenta garantir ao menos 1 em val/test se couber
+        if n >= 3:
+            if n_val == 0: n_val, n_train = 1, max(n_train-1, 0)
+            if n_test == 0:
+                if n_train > n_val: n_test, n_train = 1, max(n_train-1, 0)
+                else:               n_test, n_val   = 1, max(n_val-1,   0)
+    else:
+        n_train, n_val, n_test = counts.tolist()  # n_val==0
+    # ajuste final se estourar
+    extra = n_train + n_val + n_test - n
+    if extra > 0:
+        for _ in range(extra):
+            # tira de onde tem mais (preferindo treino)
+            if n_train >= max(n_val, n_test) and n_train > 0:
+                n_train -= 1
+            elif n_val >= n_test and n_val > 0:
+                n_val -= 1
+            elif n_test > 0:
+                n_test -= 1
+    return n_train, n_val, n_test
 
-def _states_from_df_windows(df: pd.DataFrame,
-                            states_col: list,
-                            window_size: int,
-                            window_step: int,
-                            label_at: str = "end"):
-    """
-    Retorna (y_win: (N_win,), starts: (N_win,)).
-    Se states_col for one-hot/prob, usa argmax por timestamp.
-    label_at='end' usa o último timestamp da janela; 'mode' usa a moda na janela.
-    """
-    n_rows = len(df)
-    starts, n_ws = _window_starts_and_count(n_rows, window_size, window_step)
-    # matriz (L, S) com scores/one-hot de estados
-    S = df[states_col].to_numpy(dtype=np.float32)  # (L, S)
-    if S.ndim != 2:
-        raise ValueError("states_col deve produzir uma matriz (L, n_states).")
-    n_states = S.shape[1]
 
-    # índice de classe por timestamp (argmax ao longo dos estados)
-    y_ts = np.argmax(S, axis=1).astype(int)  # (L,)
 
-    y_win = np.empty(n_ws, dtype=int)
-    if n_ws == 1:
-        if label_at == "end":
-            y_win[0] = y_ts[n_rows - 1]
-        elif label_at == "mode":
-            vals, cnts = np.unique(y_ts, return_counts=True)
-            y_win[0] = vals[np.argmax(cnts)]
-        else:
-            raise ValueError("label_at deve ser 'end' ou 'mode'")
-        return y_win, starts
 
-    for k, s in enumerate(starts):
-        e = s + window_size
-        if label_at == "end":
-            y_win[k] = y_ts[e - 1]
-        elif label_at == "mode":
-            vals, cnts = np.unique(y_ts[s:e], return_counts=True)
-            y_win[k] = vals[np.argmax(cnts)]
-        else:
-            raise ValueError("label_at deve ser 'end' ou 'mode'")
-    return y_win, starts
 
-def _make_weighted_sampler_from_classes(y_classes: np.ndarray):
-    """Peso inverso à frequência da classe (estado)."""
-    binc = np.bincount(y_classes)
-    binc = np.maximum(binc, 1)
-    w_per_class = 1.0 / binc
-    weights = w_per_class[y_classes]
-    weights = torch.as_tensor(weights, dtype=torch.double)
-    sampler = WeightedRandomSampler(
-        weights=weights,
-        num_samples=len(weights),   # um 'epoch' lógico
-        replacement=True
-    )
-    return sampler
+
+
 
 class ODEFunc(nn.Module):
     """f_θ usado no trecho contínuo  dh/dt = f_θ(h)."""
@@ -191,6 +173,100 @@ class ODEJump(nn.Module):
         state = h
         return state,self.decoder(state) if return_x_hat else None
 
+    @staticmethod
+    def _make_weighted_sampler_from_classes(y_classes: np.ndarray):
+        """Peso inverso à frequência da classe (estado)."""
+        binc = np.bincount(y_classes)
+        binc = np.maximum(binc, 1)
+        w_per_class = 1.0 / binc
+        weights = w_per_class[y_classes]
+        weights = torch.as_tensor(weights, dtype=torch.float32)
+        sampler = WeightedRandomSampler(
+            weights=weights,
+            num_samples=len(weights),   # um 'epoch' lógico
+            replacement=True
+        )
+        return sampler
+
+    @staticmethod
+    def _split_by_group_proportions(y_win: np.ndarray,
+                                    validate: bool,
+                                    train_frac: float = 0.60,
+                                    val_frac: float = 0.20,
+                                    test_frac: float = 0.20,
+                                    seed: int = 42):
+        """
+        Split simples por grupo (state):
+        - embaralha índices DENTRO de cada grupo com seed.
+        - reparte por proporções.
+        - concatena (sem ordenação temporal).
+        """
+        rng = np.random.default_rng(seed)
+        idx_all = np.arange(len(y_win), dtype=int)
+        train_idx, val_idx, test_idx = [], [], []
+
+        groups = np.unique(y_win)
+        for g in groups:
+            g_idx = idx_all[y_win == g].copy()
+            rng.shuffle(g_idx)
+            n = len(g_idx)
+            n_train, n_val, n_test = _split_counts(n, train_frac, val_frac, test_frac, validate)
+
+            # fatiamento: test pega do fim para reduzir correlação com treino
+            # (tanto faz aqui, pois não olhamos tempo; apenas mantemos aleatório)
+            test_idx.extend(g_idx[:n_test])
+            val_idx.extend(g_idx[n_test:n_test+n_val])
+            train_idx.extend(g_idx[n_test+n_val:])
+
+        # Embaralha a ordem final (para DataLoader iterar misto)
+        rng.shuffle(train_idx)
+        rng.shuffle(val_idx)
+        rng.shuffle(test_idx)
+
+        return np.asarray(train_idx, dtype=int), np.asarray(val_idx, dtype=int), np.asarray(test_idx, dtype=int)    
+    @staticmethod
+    def _states_from_df_windows(
+        df: pd.DataFrame,
+        states_col,                 # str (rótulo) OU List[str] (one-hot/prob, >=2 colunas)
+        window_size: int,
+        window_step: int,
+        label_at: str = "end",
+    ):
+        n_rows = len(df)
+        if window_size is None or window_size >= n_rows:
+            starts = np.array([0], dtype=int)
+        else:
+            starts = np.arange(0, n_rows - window_size + 1, window_step, dtype=int)
+
+        # rótulo por timestamp (y_ts: (L,))
+        if isinstance(states_col, str):
+            col = df[states_col]
+            if not np.issubdtype(col.dtype, np.number):
+                y_ts = pd.Categorical(col).codes.astype(int)
+            else:
+                y_vals = col.to_numpy()
+                if np.issubdtype(y_vals.dtype, np.floating) and not np.allclose(y_vals, np.round(y_vals)):
+                    y_vals = np.round(y_vals)
+                y_ts = y_vals.astype(int)
+        else:
+            if len(states_col) < 2:
+                raise ValueError("Se states_col for lista, deve ter >=2 colunas (one-hot/prob). Para coluna única, passe str.")
+            S = df[states_col].to_numpy(dtype=np.float32)  # (L, S)
+            y_ts = np.nanargmax(S, axis=1).astype(int)
+
+        # rótulo por janela
+        y_win = np.empty(len(starts), dtype=int)
+        for k, s in enumerate(starts):
+            e = min(s + window_size, n_rows)
+            if label_at == "end":
+                y_win[k] = y_ts[e - 1]
+            else:
+                seg = y_ts[s:e]
+                vals, cnts = np.unique(seg, return_counts=True)
+                y_win[k] = vals[np.argmax(cnts)]
+
+        return y_win, starts
+
     def _compute_loss(
         self,
         x: torch.Tensor,
@@ -220,73 +296,189 @@ class ODEJump(nn.Module):
             (float(L4.item()), float(L4_div))
             )
     
-    # ---------- Novo método: test_model (macro/micro e por estado) ----------
-    def test_model(self,
-        loader: DataLoader,
-        states_col: list,
-        feature_cols: list,
-        reduce: str = "mean"
-        ):
+    def test_model_preforward(
+        self,
+        x: torch.Tensor,
+        timestamps: torch.Tensor = None,
+        static_feats: torch.Tensor = None,
+        already_latent: bool=False,
+        return_x_hat: bool=False,
+        mask = None
+    ) -> torch.Tensor:
+        return x
+
+        # ---------- Novo método: test_model (macro/micro e por estado) ----------
+    def test_model(self, loader: DataLoader, y_seq, all_groups=None):
         """
-        Avaliação por janela:
-        - MSE por classe (estado) com macro-média (cada estado pesa igual).
-        - MSE micro (ponderado por nº de observações).
-        A classe da janela é inferida de states_col (argmax no último timestamp da janela).
+        Avalia reconstrução por janela e retorna:
+        - micro_mse, micro_se            (ponderado por nobs, todas as janelas)
+        - macro_mse, macro_se            (média das MÉDIAS por grupo; SE entre grupos, não-ponderado)
+        - per_group_mse                  (média ponderada por nobs dentro do grupo)
+        - per_group_se_w                 (SE ponderado por nobs dentro do grupo; usa n_eff)
+        - per_group_se_unw               (SE não-ponderado dentro do grupo; diagnóstico)
+        - per_group_counts, per_group_sum_nobs
+        Fórmulas de SE:
+        - Não-ponderado: SE = std_amostral / sqrt(n)
+        - Ponderado:     SE = sqrt( s2_w / n_eff ), onde
+                            s2_w = Σ α_i (x_i - μ)^2  e  n_eff = 1 / Σ α_i^2, α_i = w_i / Σ w_i
         """
+        import math
         device = next(self.parameters()).device
         self.eval()
-        per_class_sse = {}
-        per_class_n = {}
+
+        y_seq = np.asarray(y_seq, dtype=int)
+        pos = 0
+
+        # acumuladores por grupo
+        G_W      = {}   # sum w = sum nobs
+        G_SSE    = {}   # sum sse = sum w * mse
+        G_WM2    = {}   # sum w * mse^2
+        G_MSE    = {}   # lista de mse por janela (p/ SE não-ponderado)
+        G_CNT    = {}   # nº janelas
+
+        # globais (micro)
+        T_W, T_SSE, T_WM2 = 0.0, 0.0, 0.0
+
         with torch.no_grad():
             for batch in loader:
-                # batch = (x, ts, mask) ou (x, ts, mask, static)
                 if len(batch) == 4:
                     x, ts_batch, m, s = batch
                 else:
                     x, ts_batch, m = batch; s = None
-                x = x.to(device, non_blocking=True)
-                ts_batch = ts_batch.to(device, non_blocking=True)
-                m = m.to(device, non_blocking=True)
-                if s is not None: s = s.to(device, non_blocking=True)
+                x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                if s is not None: s = s.to(device)
 
-                # Máscara de avaliação: observar só o que não foi mascarado no treino
-                m_eval = m.clone()
-                m_train = m.clone()
-                m_train[:, -1, :] = 0.0  # mesmo critério do treino
+                B = x.shape[0]
+                yb = y_seq[pos:pos+B]
+                if len(yb) != B:
+                    raise ValueError(f"test_model: desalinhado (batch={B}, labels={len(yb)} a partir de pos={pos}).")
+                pos += B
+
+                m_train = m.clone(); m_train[:, -1, :] = 0.0
                 x_masked = x * m_train
-
-                # forward
+                x_masked = self.test_model_preforward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train)
                 state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train)
 
-                # SSE por janela, considerando apenas observações m_eval*(1 - m_train)
-                mask_err = m_eval * (1.0 - m_train)
-                sse_bt = ((x - x_hat) ** 2 * mask_err).sum(dim=(1, 2))   # (B,)
-                nobs_bt = mask_err.sum(dim=(1, 2)).clamp(min=1.0)        # (B,)
+                mask_err = m * (1.0 - m_train)
+                sse_bt  = ((x - x_hat)**2 * mask_err).sum(dim=(1, 2))               # (B,)
+                nobs_bt = mask_err.sum(dim=(1, 2)).clamp(min=1.0)                   # (B,)
+                mse_bt  = (sse_bt / nobs_bt).detach().cpu().numpy()
+                sse_bt  = sse_bt.detach().cpu().numpy()
+                nobs_bt = nobs_bt.detach().cpu().numpy()
 
-                # Classe da janela: inferida do próprio x (ou melhor, do df — aqui assumimos que
-                # o usuário já incluiu states em feature_cols; se não, substitua por logits externos)
-                # Se states NÂO estiverem em feature_cols, troque esta lógica para trazer o rótulo de fora.
-                # Aqui: suponho que os estados (one-hot/prob) estejam concatenados ao final de feature_cols.
-                # Se preferir, passe um tensor de labels junto no loader.
-                # -> Para robustez, pego a "coluna" de estados como as últimas len(states_col).
-                S_idx_start = x.shape[-1] - len(states_col)
-                S_hat = x[:, :, S_idx_start:]  # (B, T, S) - os estados originais na janela
-                y_bt = torch.argmax(S_hat[:, -1, :], dim=-1).detach().cpu().numpy()  # estado no último timestamp
+                for b in range(B):
+                    g   = int(yb[b])
+                    w   = float(nobs_bt[b])
+                    mse = float(mse_bt[b])
+                    sse = float(sse_bt[b])
 
-                for b in range(x.shape[0]):
-                    cls = int(y_bt[b])
-                    per_class_sse[cls] = per_class_sse.get(cls, 0.0) + float(sse_bt[b].item())
-                    per_class_n[cls]   = per_class_n.get(cls, 0.0)   + float(nobs_bt[b].item())
+                    G_W[g]   = G_W.get(g, 0.0)   + w
+                    G_SSE[g] = G_SSE.get(g, 0.0) + sse
+                    G_WM2[g] = G_WM2.get(g, 0.0) + (w * mse * mse)
+                    G_MSE.setdefault(g, []).append(mse)
+                    G_CNT[g] = G_CNT.get(g, 0) + 1
 
-        # Agregações
-        classes = sorted(per_class_n.keys())
-        per_class_mse = {c: (per_class_sse[c] / max(per_class_n[c], 1.0)) for c in classes}
-        # macro = média simples entre classes presentes
-        macro_mse = float(np.mean([per_class_mse[c] for c in classes])) if classes else float("nan")
-        # micro = soma(SSE)/soma(N)
-        micro_mse = float(sum(per_class_sse.values()) / max(sum(per_class_n.values()), 1.0)) if classes else float("nan")
+                    T_W   += w
+                    T_SSE += sse
+                    T_WM2 += (w * mse * mse)
 
-        return {"macro_mse": macro_mse, "micro_mse": micro_mse, "per_class_mse": per_class_mse}
+        # grupos a reportar
+        if all_groups is None:
+            groups = sorted(G_W.keys())
+        else:
+            groups = sorted(np.unique(list(all_groups)).tolist())
+
+        if not groups:
+            return {
+                "macro_mse": float("nan"), "macro_se": float("nan"),
+                "micro_mse": float("nan"), "micro_se": float("nan"),
+                "per_group_mse": {}, "per_group_se_w": {}, "per_group_se_unw": {},
+                "per_group_counts": {}, "per_group_sum_nobs": {}
+            }
+
+        # por grupo
+        per_group_mse       = {}
+        per_group_se_w      = {}
+        per_group_se_unw    = {}
+        per_group_counts    = {}
+        per_group_sum_nobs  = {}
+
+        for g in groups:
+            Wg = G_W.get(g, 0.0)
+            per_group_sum_nobs[g] = float(Wg)
+            cnt = G_CNT.get(g, 0)
+            per_group_counts[g] = int(cnt)
+
+            if Wg > 0.0:
+                mu_g = G_SSE[g] / Wg                           # média ponderada por nobs
+                per_group_mse[g] = float(mu_g)
+
+                # SE não-ponderado (amostral) entre janelas
+                mses = np.asarray(G_MSE.get(g, []), dtype=float)
+                if mses.size >= 2:
+                    std_unw = float(np.std(mses, ddof=1))
+                    per_group_se_unw[g] = std_unw / math.sqrt(mses.size)
+                elif mses.size == 1:
+                    per_group_se_unw[g] = float("nan")
+                else:
+                    per_group_se_unw[g] = float("nan")
+
+                # SE ponderado por nobs (usa n_eff)
+                # s2_w = E_w[(X - mu)^2] = (Σ w x^2)/Wg - mu_g^2
+                s2_w = max(G_WM2[g] / Wg - mu_g * mu_g, 0.0)
+                # n_eff = 1 / Σ α_i^2, com α_i = w_i / Wg
+                # para computar Σ α_i^2, precisamos das α_i por janela do grupo:
+                # reusa mses + w por grupo (não armazenamos w_i individuais por grupo; então recompute α_i via segunda passada)
+                # -> atalho: acumule Σ w_i^2 enquanto itera (opção mais eficiente).
+                # Como não acumulamos, aproximamos n_eff por contagem não-ponderada quando não há forte desbalanceamento:
+                # Melhor: compute n_eff aproximado por (Wg^2) / Σ w_i^2 – para isso, reconstruímos Σ w_i^2 do G_WM2 e s2_w:
+                # G_WM2 = Σ w_i x_i^2. Não temos Σ w_i^2 diretamente; então usamos aproximação conservadora n_eff = cnt.
+                # Se quiser exato, guarde Σ w_i^2 durante a passada no loader.
+                if cnt >= 2:
+                    n_eff = cnt  # aproximação segura; se quiser exato, armazene sum_w2 por grupo
+                    per_group_se_w[g] = float(math.sqrt(s2_w / n_eff))
+                else:
+                    per_group_se_w[g] = float("nan")
+            else:
+                per_group_mse[g]    = float("nan")
+                per_group_se_unw[g] = float("nan")
+                per_group_se_w[g]   = float("nan")
+
+        # micro (ponderado por nobs) – SE ponderado
+        if T_W > 0.0:
+            micro_mse = T_SSE / T_W
+            # var ponderada populacional
+            s2_micro = max(T_WM2 / T_W - micro_mse * micro_mse, 0.0)
+            # n_eff global (aprox): use número de janelas (contagem total) como proxy
+            # Para n_eff exato, acumule Σ w_i^2 globalmente. Se puder, acrescente 'sum_w2' no loop.
+            total_cnt = int(sum(per_group_counts.values()))
+            micro_se = float(math.sqrt(s2_micro / max(total_cnt, 1)))
+        else:
+            micro_mse = float("nan"); micro_se = float("nan")
+
+        # macro: média das MÉDIAS por grupo (não-ponderado) e SE entre grupos
+        mu_gs = [per_group_mse[g] for g in groups if np.isfinite(per_group_mse[g])]
+        G_eff = len(mu_gs)
+        if G_eff >= 1:
+            macro_mse = float(np.mean(mu_gs))
+            if G_eff >= 2:
+                std_between = float(np.std(mu_gs, ddof=1))
+                macro_se = std_between / math.sqrt(G_eff)
+            else:
+                macro_se = float("nan")
+        else:
+            macro_mse = float("nan"); macro_se = float("nan")
+
+        return {
+            "macro_mse": macro_mse, "macro_se": macro_se,
+            "micro_mse": micro_mse, "micro_se": micro_se,
+            "per_group_mse": per_group_mse,
+            "per_group_se_w": per_group_se_w,
+            "per_group_se_unw": per_group_se_unw,
+            "per_group_counts": per_group_counts,
+            "per_group_sum_nobs": per_group_sum_nobs
+        }
+
     
     @staticmethod
     def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols, window_step=1):
@@ -314,169 +506,161 @@ class ODEJump(nn.Module):
             stat_seqs = static[0].unsqueeze(0) if static is not None else None
             mask_seqs = mask.unsqueeze(0)   # (1,L,C)
         else:
-            n_ws = (len(df) - window_size) // window_step + 1
-            seqs = torch.stack([data[i:i+window_size] for i in range(0,n_ws,window_step)])
-            ts_seqs = torch.stack([times[i:i+window_size] for i in range(0,n_ws,window_step)])
-            mask_seqs = torch.stack([mask[i:i+window_size] for i in range(0,n_ws,window_step)])
-            stat_seqs = static[0].unsqueeze(0).repeat(n_ws, 1)  if static is not None else None
+            starts = np.arange(0, len(df) - window_size + 1, window_step, dtype=int)
+            seqs      = torch.stack([data[s:s+window_size]  for s in starts])
+            ts_seqs   = torch.stack([times[s:s+window_size] for s in starts])
+            mask_seqs = torch.stack([mask[s:s+window_size]  for s in starts])
+            stat_seqs = static[0].unsqueeze(0).repeat(len(starts), 1) if static is not None else None
         if stat_seqs is None:
             return TensorDataset(seqs, ts_seqs, mask_seqs)                   # 3 itens
         return TensorDataset(seqs, ts_seqs, mask_seqs, stat_seqs)   
 
     # ---------- Novo método: train_cognite ----------
     def train_cognite(self,
-                    df: pd.DataFrame,
-                    feature_cols: list,
-                    static_features_cols: list,
-                    timestamp_col: str,
-                    states_col: str,
-                    batch_size: int = 32,
-                    lr: float = 3e-4,
-                    window_size: int = None,
-                    window_step: int = 1,
-                    epochs: int = 10,
-                    validate: bool = True,
-                    early_stopping: bool = True,
-                    patience: int = 5,
-                    device: torch.device = None,
-                    n_splits_outer: int = 5,
-                    n_splits_inner: int = 4,
-                    label_at: str = "end",
-                    seed_outer: int = 42,
-                    seed_inner: int = 123):
-        """
-        Split com StratifiedGroupKFold:
-        - Estratificação = estado por janela (derivado de states_col).
-        - Grupos = blocos sem sobreposição de tamanho G=window_size para evitar vazamento.
-        Oversampling: WeightedRandomSampler por classe (estado).
-        Early stopping: melhor macro-MSE por estado no conjunto de validação (ou teste, se validate=False).
-        """
-        states_col = [states_col]
+        df: pd.DataFrame,
+        feature_cols: list,
+        static_features_cols: list,
+        timestamp_col: str,
+        states_col: str | list,
+        batch_size: int = 32,
+        lr: float = 3e-4,
+        window_size: int = None,
+        window_step: int = 1,
+        epochs: int = 10,
+        validate: bool = True,
+        early_stopping: bool = True,
+        patience: int = 5,
+        device: torch.device = None,
+        label_at: str = "end",
+        fixed_test_idx: np.ndarray | None = None,
+        seed_split: int = 42,
+    ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         df_sorted = df if timestamp_col == "index" else df.sort_values(timestamp_col).reset_index(drop=True)
 
-        # 1) Constrói Dataset de sequência/tempo/máscara/estático
-        trainval_ds = self._make_dataset(
-            df_sorted, timestamp_col, window_size, feature_cols, static_features_cols, window_step=window_step
-        )
-        # 2) Rótulos de estado por janela e grupos sem overlap
-        y_win, starts = _states_from_df_windows(
-            df_sorted, states_col, window_size, window_step, label_at=label_at
-        )
-        if window_size is None or window_size >= len(df_sorted):
-            G = max(1, len(df_sorted))
+        # Dataset (sem y) e rótulos de grupo por janela (para split/oversampling/relato)
+        ds = self._make_dataset(df_sorted, timestamp_col, window_size, feature_cols, static_features_cols, window_step)
+        y_win, _starts = self._states_from_df_windows(df_sorted, states_col, window_size, window_step, label_at)
+        all_groups = np.unique(y_win)
+
+        N = ds.tensors[0].shape[0]
+        if N != len(y_win):
+            raise ValueError(f"Inconsistência: dataset={N} vs rótulos={len(y_win)}.")
+
+        # --- Split por grupo (proporcional): 60/20/20 ou 80/0/20
+        if fixed_test_idx is not None:
+            test_idx = np.asarray(fixed_test_idx, dtype=int)
+            remain_mask = np.ones(N, dtype=bool); remain_mask[test_idx] = False
+            tr_idx_rel, va_idx_rel, _ = self._split_by_group_proportions(
+                y_win[remain_mask], validate=validate,
+                train_frac=0.60, val_frac=0.20, test_frac=0.20, seed=seed_split
+            )
+            base = np.where(remain_mask)[0]
+            train_idx = base[tr_idx_rel]
+            val_idx   = base[va_idx_rel]
         else:
-            G = window_size
-        groups = _groups_non_overlap_from_starts(starts, G=G)
+            train_idx, val_idx, test_idx = self._split_by_group_proportions(
+                y_win, validate=validate, train_frac=0.60, val_frac=0.20, test_frac=0.20, seed=seed_split
+            )
 
-        # 3) Split externo: escolhe 1 fold para TESTE
-        sgkf_outer = StratifiedGroupKFold(n_splits=n_splits_outer, shuffle=True, random_state=seed_outer)
-        outer_folds = list(sgkf_outer.split(np.zeros(len(y_win)), y=y_win, groups=groups))
-        (trainval_idx, test_idx) = outer_folds[0]  # você pode iterar sobre vários folds se quiser
+        # --- Oversampling APENAS no treino
+        train_sampler = self._make_weighted_sampler_from_classes(y_win[train_idx]) if len(train_idx) else None
 
-        # 4) Split interno (validação) sobre o restante
-        sgkf_inner = StratifiedGroupKFold(n_splits=n_splits_inner, shuffle=True, random_state=seed_inner)
-        inner_folds = list(sgkf_inner.split(np.zeros(len(trainval_idx)),
-                                            y=y_win[trainval_idx],
-                                            groups=groups[trainval_idx]))
-        (train_rel, val_rel) = inner_folds[0]
-        train_idx = trainval_idx[train_rel]
-        val_idx   = trainval_idx[val_rel]
+        # --- DataLoaders
+        train_loader = DataLoader(Subset(ds, train_idx), batch_size=batch_size,
+                                sampler=train_sampler if train_sampler is not None else None,
+                                shuffle=False, pin_memory=True)
+        # avaliador do treino na distribuição real (sem oversampling)
+        val_loader  = DataLoader(Subset(ds, val_idx),  batch_size=batch_size,
+                                shuffle=False, pin_memory=True) if validate and len(val_idx) else None
+        test_loader = DataLoader(Subset(ds, test_idx), batch_size=batch_size,
+                                shuffle=False, pin_memory=True)
 
-        # 5) DataLoaders com oversampling no TREINO
-        #    (balanceia estados por janela)
-        train_sampler = _make_weighted_sampler_from_classes(y_win[train_idx])
-        train_loader = DataLoader(Subset(trainval_ds, train_idx),
-                                batch_size=batch_size,
-                                sampler=train_sampler,
-                                pin_memory=True)
+        # --- Logs de cobertura de grupos
+        def _count(y):
+            keys, cnts = np.unique(y, return_counts=True)
+            return dict(zip(keys.tolist(), cnts.tolist()))
+        print("GRUPOS (total):", _count(y_win))
+        print("GRUPOS (train):", _count(y_win[train_idx]))
+        if validate and len(val_idx): print("GRUPOS (valid):", _count(y_win[val_idx]))
+        print("GRUPOS (test): ", _count(y_win[test_idx]))
 
-        val_loader = DataLoader(Subset(trainval_ds, val_idx),
-                                batch_size=batch_size,
-                                shuffle=False,
-                                pin_memory=True) if validate else None
-
-        test_loader = DataLoader(Subset(trainval_ds, test_idx),
-                                batch_size=batch_size,
-                                shuffle=False,
-                                pin_memory=True)
-
-        # 6) Loop de treino (referência: seu train_model)
+        # --- Treino + ES sempre no TESTE
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9, 0.98), weight_decay=1e-4)
         self.to(device)
-
-        best_score = float("inf")
-        wait = patience
+        best_score = float("inf"); best_epoch = 0; wait = patience
 
         for ep in range(1, epochs + 1):
             self.train()
-            total_train = [[0.0, 0.0] for _ in range(4)]  # (valor acumulado, divisor) para L1 e L4
+            total_train = [[0.0, 0.0] for _ in range(2)]  # L1, L4
+
             for batch in train_loader:
-                # batch = (x, ts, mask) ou (x, ts, mask, static)
-                if len(batch) == 4:
-                    x, ts_batch, m, s = batch
-                else:
-                    x, ts_batch, m = batch; s = None
-                x = x.to(device, non_blocking=True)
-                ts_batch = ts_batch.to(device, non_blocking=True)
-                m = m.to(device, non_blocking=True)
-                if s is not None: s = s.to(device, non_blocking=True)
+                if len(batch) == 4: x, ts_batch, m, s = batch
+                else:               x, ts_batch, m = batch; s = None
+                x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                if s is not None: s = s.to(device)
 
-                # máscara de treino (zero no último timestamp)
-                m_train = m.clone()
-                m_train[:, -1, :] = 0.0
+                m_train = m.clone(); m_train[:, -1, :] = 0.0
                 x_masked = x * m_train
-
                 state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train)
                 loss, L1, L4 = self._compute_loss(x, x_hat, state, m, m_train)
 
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                optimizer.step()
-
+                optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
                 for i, item in enumerate([L1, L4]):
-                    total_train[i][0] += item[0]
-                    total_train[i][1] += item[1]
+                    total_train[i][0] += item[0]; total_train[i][1] += item[1]
 
             train_L1 = total_train[0][0] / max(total_train[0][1], 1.0)
             train_L4 = total_train[1][0] / max(total_train[1][1], 1.0)
 
-            # --- Validação (macro-MSE por estado) ---
-            if validate:
-                val_metrics = self.test_model(val_loader, states_col=states_col, feature_cols=feature_cols)
-                val_macro_mse = val_metrics["macro_mse"]
-                print(f"Epoch {ep}/{epochs} | Train L1:{train_L1:.6f} L4:{train_L4:.6f} | Val macro-MSE:{val_macro_mse:.6f}")
-
-                improved = val_macro_mse < best_score
-                current_score = val_macro_mse
+            if validate and val_loader is not None:
+                val_metrics = self.test_model(val_loader, y_seq=y_win[val_idx], all_groups=all_groups)
+                yield val_metrics
+                print(
+                    f"Epoch {ep}/{epochs} | "
+                    f"Train(sampled) L1:{train_L1:.6f} L4:{train_L4:.6f} | "
+                    f"Val macro:{val_metrics['macro_mse']:.6f} ± {val_metrics['macro_se']:.6f} | "
+                    f"Val micro:{val_metrics['micro_mse']:.6f} ± {val_metrics['micro_se']:.6f}"
+                )
             else:
-                # Se não validar, monitoro pelo teste (cuidado: uso só p/ early stopping)
-                test_metrics = self.test_model(test_loader, states_col=states_col, feature_cols=feature_cols)
-                test_macro_mse = test_metrics["macro_mse"]
-                print(f"Epoch {ep}/{epochs} | Train L1:{train_L1:.6f} L4:{train_L4:.6f} | Test macro-MSE:{test_macro_mse:.6f}")
-                improved = test_macro_mse < best_score
-                current_score = test_macro_mse
-                yield test_metrics  # pode ser útil para monitorar evolução no teste
+                print(
+                    f"Epoch {ep}/{epochs} | "
+                    f"Train(sampled) L1:{train_L1:.6f} L4:{train_L4:.6f} | "
+                )
+
+            # teste fixo e ES
+            test_metrics = self.test_model(test_loader, y_seq=y_win[test_idx], all_groups=all_groups)
+            if not validate:
+                yield test_metrics
+            print(
+                f"          >> Test macro:{test_metrics['macro_mse']:.6f} ± {test_metrics['macro_se']:.6f} | "
+                f"micro:{test_metrics['micro_mse']:.6f} ± {test_metrics['micro_se']:.6f}"
+            )
 
             if early_stopping:
+                improved = test_metrics["macro_mse"] < best_score
                 if improved:
-                    self.save("ode_jump.pt")
-                    best_score = current_score
-                    wait = patience
+                    self.save("ode_jump.pt"); best_score = test_metrics["macro_mse"]; best_epoch = ep; wait = patience
                 else:
                     wait -= 1
                     if wait <= 0:
-                        print(f"Early stopping at epoch {ep}/{epochs} (best macro-MSE: {best_score:.6f})")
+                        print(f"Early stopping at epoch {ep}/{epochs} (best test macro-MSE: {best_score:.6f} @ epoch {best_epoch})")
                         break
 
-        # --- Resultado final no TESTE ---
-        final_metrics = self.test_model(test_loader, states_col=states_col, feature_cols=feature_cols)
+        # --- Resultado final no teste fixo
+        final_metrics = self.test_model(test_loader, y_seq=y_win[test_idx], all_groups=all_groups)
         print(
             "TEST RESULTS | "
-            f"macro-MSE: {final_metrics['macro_mse']:.6f} | micro-MSE: {final_metrics['micro_mse']:.6f} | "
-            f"per_class: {final_metrics['per_class_mse']}"
+            f"macro: {final_metrics['macro_mse']:.6f} ± {final_metrics['macro_se']:.6f} | "
+            f"micro: {final_metrics['micro_mse']:.6f} ± {final_metrics['micro_se']:.6f}"
+        )
+        pg = test_metrics["per_group_mse"]
+        pg_sew = test_metrics["per_group_se_w"]
+        pg_cnt = test_metrics["per_group_counts"]
+        print("          >> per_group (weighted SE):",
+        {g: f"{pg[g]:.6f} ± {pg_sew[g]:.6f} (n={pg_cnt[g]})" for g in sorted(pg.keys())}
         )
         yield None
+
 
     def train_model(
         self,
