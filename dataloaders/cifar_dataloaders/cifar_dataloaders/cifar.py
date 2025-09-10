@@ -93,13 +93,8 @@ class CIFAR10Dataset(Dataset):
 # CIFAR-100 Dataset
 class CIFAR100Dataset(Dataset):
     base_folder = "cifar-100-python"
-    train_list = [
-        ("train", None),
-    ]
-    test_list = [
-        ("test", None),
-    ]
-    meta = {"filename": "meta", "key": "fine_label_names", "md5": None}
+    train_list = [("train", None)]
+    test_list = [("test", None)]
 
     def __init__(
         self,
@@ -107,11 +102,13 @@ class CIFAR100Dataset(Dataset):
         train: bool = True,
         transform: Optional[Callable] = None,
         target_transform: Optional[Callable] = None,
+        superclass: bool = False,  # Add this argument
     ) -> None:
         self.root = str(root)
         self.transform = transform
         self.target_transform = target_transform
         self.is_train = train
+        self.superclass = superclass
 
         self.data: Any = []
         self.targets = []
@@ -119,17 +116,23 @@ class CIFAR100Dataset(Dataset):
             file_path = os.path.join(self.root, self.base_folder, file_name)
             with open(file_path, "rb") as f:
                 entry = pickle.load(f, encoding="latin1")
+                if self.superclass:
+                    self.targets.extend(entry["coarse_labels"])
+                else:
+                    self.targets.extend(entry["fine_labels"])
                 self.data.append(entry["data"])
-                self.targets.extend(entry["fine_labels"])
         self.data = np.vstack(self.data).reshape(-1, 3, 32, 32)
         self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
         self._load_meta()
 
     def _load_meta(self) -> None:
-        path = os.path.join(self.root, self.base_folder, self.meta["filename"])
+        path = os.path.join(self.root, self.base_folder, "meta")
         with open(path, "rb") as infile:
             data = pickle.load(infile, encoding="latin1")
-            self.classes = data[self.meta["key"]]
+            if self.superclass:
+                self.classes = data["coarse_label_names"]
+            else:
+                self.classes = data["fine_label_names"]
         self.class_to_idx = {_class: i for i, _class in enumerate(self.classes)}
 
     def __getitem__(self, index):

@@ -73,24 +73,52 @@ def parse_args():
         choices=["10", "100"],
         help="CIFAR dataset to use",
     )
+    parser.add_argument(
+        "--class_type",
+        default="class",
+        type=str,
+        choices=["class", "superclass"],
+        help="use CIFAR with class (100) or superclasses (20)",
+    )
 
     args = parser.parse_args()
     return args
 
 
-def load_cifar(cifar_type="10", path="../../../datasets/cifar10", model_type="vit"):
-    n_classes = 10 if cifar_type == "10" else 100
-
+def load_cifar(
+    cifar_type="10",
+    class_type="superclass",
+    path="../../../datasets/cifar10",
+    model_type="vit",
+):
+    n_classes = 10
+    # Resize for ViT
     if model_type == "vit":
         transform = transforms.Resize(384)
     else:
         transform = None
+
+    # Dataset init
+    if class_type == "class" and cifar_type == "100":
+        n_classes = 100
+        train_set = CIFAR100Dataset(
+            root=path, train=True, transform=transform, superclass=False
+        )
+        test_set = CIFAR100Dataset(
+            root=path, train=False, transform=transform, superclass=False
+        )
+    if class_type == "superclass" and cifar_type == "100":
+        n_classes = 20
+        train_set = CIFAR100Dataset(
+            root=path, train=True, transform=transform, superclass=True
+        )
+        test_set = CIFAR100Dataset(
+            root=path, train=False, transform=transform, superclass=True
+        )
     if cifar_type == "10":
         train_set = CIFAR10Dataset(root=path, train=True, transform=transform)
         test_set = CIFAR10Dataset(root=path, train=False, transform=transform)
-    if cifar_type == "100":
-        train_set = CIFAR100Dataset(root=path, train=True, transform=transform)
-        test_set = CIFAR100Dataset(root=path, train=False, transform=transform)
+        n_classes = 10
     else:
         raise ValueError("cifar_type must be '10' or '100'")
 
@@ -225,7 +253,10 @@ def main():
     set_seeds(args.seed)
 
     train_set, test_set, n_classes = load_cifar(
-        cifar_type=args.cifar_type, path=args.data_dir, model_type=args.model
+        cifar_type=args.cifar_type,
+        class_type=args.class_type,
+        path=args.data_dir,
+        model_type=args.model,
     )
     targets = np.array(train_set.targets)
     skf = StratifiedKFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
