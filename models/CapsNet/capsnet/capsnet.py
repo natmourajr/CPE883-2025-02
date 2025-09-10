@@ -229,17 +229,31 @@ def test(model, test_loader, args):
     return test_loss, correct / len(test_loader.dataset)
 
 
-def run_kfold(dataset, model, args, k=5, shuffle=True):
+def run_kfold(
+    dataset,
+    args,
+    k=5,
+    input_size=[3, 32, 32],
+    n_classes=100,
+    routings=3,
+    shuffle=True,
+):
     targets = np.array(dataset.targets)
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=11)
     classes = dataset.classes
-    n_classes = len(classes)
     print(f"Classes: {classes}, Number of classes: {n_classes}")
     fold_accuracies = []
     fold_loss = []
     for fold, (train_idx, val_idx) in enumerate(
         skf.split(np.zeros(len(targets)), targets)
     ):
+        model = CapsuleNet(
+            input_size=input_size,
+            classes=n_classes,
+            routings=routings,
+        )
+        model.to(DEVICE)
+        print(model)
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
         train_loader = DataLoader(

@@ -96,8 +96,11 @@ if __name__ == "__main__":
         cifar_type=args.cifar_type, path=args.data_dir, model_type="capsnet"
     )
 
-    # define model
-    model = CapsuleNet(input_size=[3, 32, 32], classes=n_classes, routings=3)
+    model = CapsuleNet(
+        input_size=[3, 32, 32],
+        classes=n_classes,
+        routings=3,
+    )
     model.cuda()
     print(model)
 
@@ -105,7 +108,14 @@ if __name__ == "__main__":
     if args.weights is not None:  # init the model weights with provided one
         model.load_state_dict(torch.load(args.weights))
     if not args.testing:
-        run_kfold(train_set, model, args)
+        run_kfold(
+            train_set,
+            model,
+            args,
+            input_size=[3, 32, 32],
+            classes=n_classes,
+            routings=3,
+        )
     else:  # testing
         if args.weights is None:
             print(
