@@ -301,7 +301,8 @@ def train(model, train_loader, val_loader, args, fold_n, classes, n_classes):
 
     logfile = open(args.save_dir + "/log.csv", "w")
     logwriter = csv.DictWriter(
-        logfile, fieldnames=["epoch", "loss", "val_loss", "val_acc", "fold"]
+        logfile,
+        fieldnames=["epoch", "loss", "val_loss", "val_acc", "fold", "train_time"],
     )
     logwriter.writeheader()
 
@@ -342,6 +343,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes, n_classes):
         losses.append(epoch_loss)
         val_losses.append(val_loss)
         val_accs.append(val_acc)
+        train_time = time() - ti
         logwriter.writerow(
             dict(
                 epoch=epoch,
@@ -349,6 +351,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes, n_classes):
                 val_loss=val_loss,
                 val_acc=val_acc,
                 fold=fold_n,
+                train_time=train_time,
             )
         )
         logfile.flush()
