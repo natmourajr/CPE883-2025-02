@@ -34,7 +34,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class CapsuleNet(nn.Module):
     """
-    A Capsule Network on CIFAR-10.
     :param input_size: data size = [channels, width, height]
     :param classes: number of classes
     :param routings: number of routing iterations
@@ -96,16 +95,13 @@ class CapsuleNet(nn.Module):
             x = F.relu(self.conv1(dummy_input))
             x = F.relu(self.conv2(x))
             x = self.primarycaps(x)
-            print(f"Número de cápsulas (stride): {x.size(1)}")
             return x.size(1)
 
     def forward(self, x, y=None):
         device = x.device
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
-        print(f"Conv2 output shape: {x.shape}")
         x = self.primarycaps(x)
-        print(f"PrimaryCapsule output shape: {x.shape}")
         x = self.digitcaps(x)
         length = x.norm(dim=-1)
         if y is None:

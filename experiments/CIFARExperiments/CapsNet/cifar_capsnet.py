@@ -93,7 +93,7 @@ if __name__ == "__main__":
 
     # load data
     train_set, test_set, n_classes = load_cifar(
-        cifar_type=args.cifar_type, path=args.data_dir
+        cifar_type=args.cifar_type, path=args.data_dir, model_type="capsnet"
     )
 
     # define model
