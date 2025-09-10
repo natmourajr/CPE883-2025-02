@@ -193,13 +193,14 @@ def test(model, test_loader, args):
     correct = 0
     all_preds = []
     all_labels = []
+    n_classes = model.classes if hasattr(model, "classes") else 10
     for x, y in test_loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        y_onehot = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
+        y_onehot = torch.zeros(y.size(0), n_classes, device=DEVICE).scatter_(
             1, y.view(-1, 1), 1.0
         )
         with torch.no_grad():
-            y_pred, x_recon = model(x)
+            y_pred, x_recon = model(x, y_onehot)
         test_loss += caps_loss(
             y_onehot, y_pred, x, x_recon, args.lam_recon
         ).item() * x.size(0)
@@ -242,11 +243,19 @@ def run_kfold(dataset, model, args, k=5, shuffle=True):
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
         train_loader = DataLoader(
-            train_subset, batch_size=args.batch_size, shuffle=shuffle
+            train_subset, batch_size=args.batch_size, shuffle=shuffle, num_workers=8
         )
-        val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
+        val_loader = DataLoader(
+            val_subset, batch_size=args.batch_size, shuffle=False, num_workers=8
+        )
         best_val_acc, best_val_loss = train(
-            model, train_loader, val_loader, args, fold, classes, n_classes
+            model,
+            train_loader,
+            val_loader,
+            args,
+            fold,
+            classes,
+            n_classes,
         )
         fold_accuracies.append(best_val_acc)
         fold_loss.append(best_val_loss)

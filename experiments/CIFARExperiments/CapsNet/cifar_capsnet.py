@@ -112,7 +112,7 @@ if __name__ == "__main__":
                 "No weights are provided. Will test using random initialized weights."
             )
         test_loader = torch.utils.data.DataLoader(
-            test_set, batch_size=args.batch_size, shuffle=False
+            test_set, batch_size=args.batch_size, shuffle=False, num_workers=8
         )
         test_loss, test_acc = test(model=model, test_loader=test_loader, args=args)
         print(f"test acc = {test_acc:.4f}, test loss = {test_loss:.5f}")
