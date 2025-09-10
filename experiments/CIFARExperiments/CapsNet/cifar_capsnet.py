@@ -110,10 +110,9 @@ if __name__ == "__main__":
     if not args.testing:
         run_kfold(
             train_set,
-            model,
             args,
             input_size=[3, 32, 32],
-            classes=n_classes,
+            n_classes=n_classes,
             routings=3,
         )
     else:  # testing
