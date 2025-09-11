@@ -117,6 +117,7 @@ class ODEJump(nn.Module):
         in_channels: int,
         hidden_dim: int = 256,
         static_dim: int = 0,
+        denoised: bool = False,
         lam: list[float,float] = [0.9, 0.1]
         
     ):
@@ -126,7 +127,7 @@ class ODEJump(nn.Module):
         self.model_dim = hidden_dim
         self.in_channels = in_channels
         self.encoder = nn.Sequential(
-            nn.Linear(in_channels*2, hidden_dim),
+            nn.Linear(in_channels*3 if denoised else in_channels*2, hidden_dim),
             nn.ReLU(),
         )
         self.decoder = nn.Sequential(
@@ -139,7 +140,6 @@ class ODEJump(nn.Module):
                 nn.Linear(static_dim, hidden_dim),
                 nn.ReLU()
             )
-
         self.odejump = JumpODE(hidden_dim, hidden_dim)
         # (d) m_b  — probabilidade de observação (Bernoulli) para L4
         self.miss_head = nn.Linear(self.model_dim, 1)
@@ -151,7 +151,8 @@ class ODEJump(nn.Module):
         static_feats: torch.Tensor = None,
         already_latent: bool=False,
         return_x_hat: bool=False,
-        mask = None
+        mask = None,
+        x_denoised: torch.Tensor = None
     ) -> torch.Tensor:
         """
         Args:
@@ -162,7 +163,7 @@ class ODEJump(nn.Module):
         """
         # Embedding de entrada
         if not already_latent:
-            h = self.encoder(torch.cat([x, mask], dim=-1))
+            h = self.encoder(torch.cat([x, mask] if x_denoised is None else [x, x_denoised, mask], dim=-1))
         # Static features
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
@@ -308,7 +309,7 @@ class ODEJump(nn.Module):
         return x
 
         # ---------- Novo método: test_model (macro/micro e por estado) ----------
-    def test_model(self, loader: DataLoader, y_seq, all_groups=None):
+    def test_model(self, loader: DataLoader, y_seq, all_groups=None, static=False, denoised=False):
         """
         Avalia reconstrução por janela e retorna:
         - micro_mse, micro_se            (ponderado por nobs, todas as janelas)
@@ -341,12 +342,18 @@ class ODEJump(nn.Module):
 
         with torch.no_grad():
             for batch in loader:
-                if len(batch) == 4:
-                    x, ts_batch, m, s = batch
+                s = None; x_denoised = None
+                x, ts_batch, m = batch[0], batch[1], batch[2]  # x, ts_batch, m
+                if static:  
+                    s = batch[3]
+                    if denoised is not None:
+                        x_denoised = batch[4]
                 else:
-                    x, ts_batch, m = batch; s = None
+                    if denoised is not None:
+                        x_denoised = batch[3]
                 x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
                 if s is not None: s = s.to(device)
+                if x_denoised is not None: x_denoised = x_denoised.to(device)
 
                 B = x.shape[0]
                 yb = y_seq[pos:pos+B]
@@ -356,8 +363,9 @@ class ODEJump(nn.Module):
 
                 m_train = m.clone(); m_train[:, -1, :] = 0.0
                 x_masked = x * m_train
+                x_denoised_masked = x_denoised * m_train if x_denoised is not None else None
                 x_masked = self.test_model_preforward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train)
-                state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train)
+                state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train, x_denoised=x_denoised_masked)
 
                 mask_err = m * (1.0 - m_train)
                 sse_bt  = ((x - x_hat)**2 * mask_err).sum(dim=(1, 2))               # (B,)
@@ -481,7 +489,7 @@ class ODEJump(nn.Module):
 
     
     @staticmethod
-    def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols, window_step=1):
+    def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols, window_step=1,df_denoised=None):
         if timestamp_col != 'index':
             df = df.sort_values(timestamp_col).reset_index(drop=True)
 # ---------------- NORMALIZAÇÃO DO TEMPO ----------------
@@ -493,27 +501,33 @@ class ODEJump(nn.Module):
         ts_rel = ((ts_raw - t0) / TS_SPAN).to_numpy(dtype=np.float32)               # começa em 0
 
         times = torch.from_numpy(ts_rel)            # (L,)           # (L,)
-        values_np = df[feature_cols].values   
+        values_np = df[feature_cols].values
         mask_np   = ~pd.isna(values_np) 
         values_np = np.nan_to_num(values_np, nan=0.0)
         data  = torch.tensor(values_np, dtype=torch.float32)
+        data_denoised = None
+        if df_denoised is not None:
+            values_np_denoised = df_denoised[feature_cols].values
+            values_np_denoised = np.nan_to_num(values_np_denoised, nan=0.0)
+            data_denoised = torch.tensor(values_np_denoised, dtype=torch.float32)
         mask  = torch.tensor(mask_np,  dtype=torch.float32)  # (L,C)
         #times = torch.tensor(ts.values, dtype=torch.float32)
         static = torch.tensor(df[static_features_cols].values, dtype=torch.float32) if static_features_cols else None
         if window_size is None or window_size >= len(df):
             seqs = data.unsqueeze(0)
+            seqs_denoised = data_denoised.unsqueeze(0) if data_denoised is not None else None
             ts_seqs = times.unsqueeze(0)
             stat_seqs = static[0].unsqueeze(0) if static is not None else None
             mask_seqs = mask.unsqueeze(0)   # (1,L,C)
         else:
             starts = np.arange(0, len(df) - window_size + 1, window_step, dtype=int)
             seqs      = torch.stack([data[s:s+window_size]  for s in starts])
+            seqs_denoised = torch.stack([data_denoised[s:s+window_size]  for s in starts]) if data_denoised is not None else None
             ts_seqs   = torch.stack([times[s:s+window_size] for s in starts])
             mask_seqs = torch.stack([mask[s:s+window_size]  for s in starts])
             stat_seqs = static[0].unsqueeze(0).repeat(len(starts), 1) if static is not None else None
-        if stat_seqs is None:
-            return TensorDataset(seqs, ts_seqs, mask_seqs)                   # 3 itens
-        return TensorDataset(seqs, ts_seqs, mask_seqs, stat_seqs)   
+        args = (arg for arg in [seqs, ts_seqs, mask_seqs, stat_seqs, seqs_denoised] if arg is not None)
+        return TensorDataset(*args)  # retorna Dataset com (seqs, ts_seqs, mask_seqs, stat_seqs, seqs_denoised) 
 
     # ---------- Novo método: train_cognite ----------
     def train_cognite(self,
@@ -534,12 +548,13 @@ class ODEJump(nn.Module):
         label_at: str = "end",
         fixed_test_idx: np.ndarray | None = None,
         seed_split: int = 42,
+        df_denoised: pd.DataFrame | None = None
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         df_sorted = df if timestamp_col == "index" else df.sort_values(timestamp_col).reset_index(drop=True)
 
         # Dataset (sem y) e rótulos de grupo por janela (para split/oversampling/relato)
-        ds = self._make_dataset(df_sorted, timestamp_col, window_size, feature_cols, static_features_cols, window_step)
+        ds = self._make_dataset(df_sorted, timestamp_col, window_size, feature_cols, static_features_cols, window_step, df_denoised)
         y_win, _starts = self._states_from_df_windows(df_sorted, states_col, window_size, window_step, label_at)
         all_groups = np.unique(y_win)
 
@@ -595,14 +610,22 @@ class ODEJump(nn.Module):
             total_train = [[0.0, 0.0] for _ in range(2)]  # L1, L4
 
             for batch in train_loader:
-                if len(batch) == 4: x, ts_batch, m, s = batch
-                else:               x, ts_batch, m = batch; s = None
+                s = None; x_denoised = None
+                x, ts_batch, m = batch[0], batch[1], batch[2]  # x, ts_batch, m
+                if static_features_cols:  
+                    s = batch[3]
+                    if df_denoised is not None:
+                        x_denoised = batch[4]
+                else:
+                    if df_denoised is not None:
+                        x_denoised = batch[3]
                 x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
                 if s is not None: s = s.to(device)
-
+                if x_denoised is not None: x_denoised = x_denoised.to(device)
                 m_train = m.clone(); m_train[:, -1, :] = 0.0
                 x_masked = x * m_train
-                state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train)
+                x_denoised_masked = x_denoised * m_train if x_denoised is not None else None
+                state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train,x_denoised=x_denoised_masked)
                 loss, L1, L4 = self._compute_loss(x, x_hat, state, m, m_train)
 
                 optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
@@ -613,7 +636,8 @@ class ODEJump(nn.Module):
             train_L4 = total_train[1][0] / max(total_train[1][1], 1.0)
 
             if validate and val_loader is not None:
-                val_metrics = self.test_model(val_loader, y_seq=y_win[val_idx], all_groups=all_groups)
+                val_metrics = self.test_model(val_loader, y_seq=y_win[val_idx], all_groups=all_groups, 
+                                              static=static_features_cols, denoised=df_denoised is not None)
                 yield val_metrics
                 print(
                     f"Epoch {ep}/{epochs} | "
@@ -628,7 +652,10 @@ class ODEJump(nn.Module):
                 )
 
             # teste fixo e ES
-            test_metrics = self.test_model(test_loader, y_seq=y_win[test_idx], all_groups=all_groups)
+            test_metrics = self.test_model(
+                test_loader, y_seq=y_win[test_idx], all_groups=all_groups, 
+                static=static_features_cols, denoised=df_denoised is not None
+                )
             if not validate:
                 yield test_metrics
             print(
@@ -647,7 +674,10 @@ class ODEJump(nn.Module):
                         break
 
         # --- Resultado final no teste fixo
-        final_metrics = self.test_model(test_loader, y_seq=y_win[test_idx], all_groups=all_groups)
+        final_metrics = self.test_model(
+            test_loader, y_seq=y_win[test_idx], all_groups=all_groups, 
+            static=static_features_cols, denoised=df_denoised is not None
+            )
         print(
             "TEST RESULTS | "
             f"macro: {final_metrics['macro_mse']:.6f} ± {final_metrics['macro_se']:.6f} | "

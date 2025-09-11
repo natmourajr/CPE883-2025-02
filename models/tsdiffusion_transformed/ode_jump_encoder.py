@@ -136,11 +136,12 @@ class ODEJumpEncoder(ODEJump):
         in_channels: int,
         hidden_dim: int = 256,
         static_dim: int = 0,
+        denoised: bool = False,
         lam: list[float,float] = [0.9, 0.1],
         n_heads: int = 4,
         n_layers: int = 4                       
         ):
-        super().__init__(in_channels, hidden_dim, static_dim, lam)  # <- chama ODEJump.__init__
+        super().__init__(in_channels, hidden_dim, static_dim, denoised, lam)  # <- chama ODEJump.__init__
         # (daqui pra baixo você pode sobrescrever/estender o que quiser)
         self.time_encoding = TimeHybridEncoding(hidden_dim)
         self.encoder_ode = JumpODEEncoder(hidden_dim, hidden_dim, attn_heads=n_heads, num_layers=n_layers)
@@ -152,7 +153,8 @@ class ODEJumpEncoder(ODEJump):
         static_feats: torch.Tensor = None,
         already_latent: bool=False,
         return_x_hat: bool=False,
-        mask = None
+        mask = None,
+        x_denoised: torch.Tensor = None
     ) -> torch.Tensor:
         """
         Args:
@@ -163,7 +165,7 @@ class ODEJumpEncoder(ODEJump):
         """
         # Embedding de entrada
         if not already_latent:
-            h = self.encoder(torch.cat([x, mask], dim=-1))
+            h = self.encoder(torch.cat([x, mask] if x_denoised is None else [x,x_denoised,mask], dim=-1))
         # Static features
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
@@ -175,32 +177,5 @@ class ODEJumpEncoder(ODEJump):
         h = self.encoder_ode(h, timestamps)
         state = h
         return state,self.decoder(state) if return_x_hat else None
-    
-    def train_cognite(
-            self, 
-            df, 
-            feature_cols, 
-            static_features_cols, 
-            timestamp_col, 
-            states_col, 
-            batch_size = 32, 
-            lr = 0.0003, 
-            window_size = None, 
-            window_step = 1, 
-            epochs = 10, 
-            validate = True, 
-            early_stopping = True, 
-            patience = 5, 
-            device = None, 
-            label_at = "end", 
-            fixed_test_idx = None, 
-            seed_split = 42,
-            df_raw = None
-            ):
-        if df_raw is not None:
-            for feat in feature_cols:
-                for i in range(window_size-1,len(df[feat]),window_step):
-                    df[feat].iloc[i] = df_raw[feat].iloc[i]   
-        return super().train_cognite(df, feature_cols, static_features_cols, timestamp_col, states_col, batch_size, lr, window_size, window_step, epochs, validate, early_stopping, patience, device, label_at, fixed_test_idx, seed_split) 
                 
                     
