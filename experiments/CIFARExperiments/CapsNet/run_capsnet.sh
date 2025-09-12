@@ -3,12 +3,13 @@
 # Run CapsNet training/testing on CIFAR-10
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAPSNET_SCRIPT="$SCRIPT_DIR/cifar_capsnet.py"
-DATA_DIR="../../../datasets/cifar10"
+DATA_DIR="../../../datasets/cifar100"
 SAVE_DIR="$SCRIPT_DIR/result"
+CIFAR_TYPE="100"
 
 # Default arguments
 EPOCHS=50
-BATCH_SIZE=100
+BATCH_SIZE=10
 LR=0.001
 LR_DECAY=0.9
 LAM_RECON=1.536  # 0.0005*3072 = 3*32*32 for CIFAR-10
@@ -26,4 +27,5 @@ python3 "$CAPSNET_SCRIPT" \
     --lam_recon $LAM_RECON \
     --routings $ROUTINGS \
     --data_dir "$DATA_DIR" \
+    --cifar_type "$CIFAR_TYPE" \
     --save_dir "$SAVE_DIR"

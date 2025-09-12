@@ -3,9 +3,12 @@
 # Run CapsNet testing on CIFAR-10
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAPSNET_SCRIPT="$SCRIPT_DIR/cifar_capsnet.py"
-DATA_DIR="../../../datasets/cifar10"
+DATA_DIR="../../../datasets/cifar100"
 SAVE_DIR="$SCRIPT_DIR/result"
-WEIGHTS="$SAVE_DIR/trained_model_4.pkl"  
+WEIGHTS="/home/eduardo/doc/CPE883-2025-02/results_cifar100_100/capsnet/trained_model_1.pkl"  
+TEST=1
+CIFAR_TYPE="100"
+CLASS_TYPE="class"  # or "superclass"
 
 # Default arguments
 BATCH_SIZE=100
@@ -26,5 +29,7 @@ python3 "$CAPSNET_SCRIPT" \
     --routings $ROUTINGS \
     --data_dir "$DATA_DIR" \
     --save_dir "$SAVE_DIR" \
-    --testing \
+    --class_type $CLASS_TYPE \
+    --cifar_type $CIFAR_TYPE \
+    --testing "true" \
     --weights "$WEIGHTS"
