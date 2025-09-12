@@ -151,7 +151,6 @@ def create_model(model_type, n_classes=10):
     if model_type == "ckan":
         model = CKAN(32, n_classes)
         model = model.to(DEVICE)
-
     return model
 
 

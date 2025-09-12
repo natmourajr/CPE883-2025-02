@@ -215,14 +215,22 @@ def test(model, test_loader, args):
     try:
         cm = confusion_matrix(all_labels, all_preds)
         plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues")
-        plt.xlabel("Predicted")
-        plt.ylabel("True")
-        plt.title("Confusion Matrix - Test Set")
-        if hasattr(args, "save_dir") and args.save_dir:
-            os.makedirs(args.save_dir, exist_ok=True)
-            plt.savefig(os.path.join(args.save_dir, "confusion_matrix_test.png"))
+        sns.heatmap(
+            cm,
+            annot=False,  # No numbers
+            cmap="crest",
+            square=True,  # Square cells
+            cbar_kws={"shrink": 0.8, "label": "Count"},
+        )
+        plt.xlabel("Predicted", fontsize=14)
+        plt.ylabel("True", fontsize=14)
+        plt.title("Confusion Matrix - capsnet", fontsize=16)
+        plt.tight_layout()
+        os.makedirs("result/capsnet", exist_ok=True)
+        plt.savefig("result/capsnet/confusion_matrix_test.png", dpi=200)
         plt.close()
+        print("Confusion matrix saved to result/capsnet/confusion_matrix_test.png")
+
     except Exception as e:
         print(f"Could not save confusion matrix: {e}")
 

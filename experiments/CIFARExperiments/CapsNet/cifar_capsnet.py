@@ -90,7 +90,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-t",
         "--testing",
-        action="store_true",
+        default=None,
         help="Test the trained model on testing dataset",
     )
     parser.add_argument(
