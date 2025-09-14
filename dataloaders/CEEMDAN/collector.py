@@ -39,7 +39,7 @@ class Collector:
     
     def read_data(
             self, file, serie_size, window_size, predict_steps, batch_size=None,
-            year=2017, freq_transform=True
+            year=2017, freq_transform=True, scales=np.arange(0.5, 10, 0.1),
             ):
         
         if file=='final_la_haute_R0711.csv':
@@ -74,32 +74,33 @@ class Collector:
 
         else:
             # 2. Dividir em treino/teste
-            split = int(0.8 * len(X))
-            X_train, y_train = X[:split], y[:split]
-            X_test, y_test = X[split:], y[split:]
+            # split = int(0.8 * len(X))
+            # X_train, y_train = X[:split], y[:split]
+            # X_test, y_test = X[split:], y[split:]
 
             # X_train shape: (num_samples, window_size)
-            scaler_X = StandardScaler()
-            X_train_scaled = scaler_X.fit_transform(X_train)  # shape permanece (num_samples, window_size)
-            X_test_scaled = scaler_X.transform(X_test)
+            # Normalização x
+            # scaler_X = StandardScaler()
+            # X_train_scaled = scaler_X.fit_transform(X_train)  # shape permanece (num_samples, window_size)
+            # X_test_scaled = scaler_X.transform(X_test)
 
             # Normalização y
-            y_train = y_train.reshape(-1,1)
-            y_test = y_test.reshape(-1,1)
-            scaler_y = StandardScaler()
-            y_train_scaled = scaler_y.fit_transform(y_train)
-            y_test_scaled = scaler_y.transform(y_test)
+            # y_train = y_train.reshape(-1,1)
+            # y_test = y_test.reshape(-1,1)
+            # scaler_y = StandardScaler()
+            # y_train_scaled = scaler_y.fit_transform(y_train)
+            # y_test_scaled = scaler_y.transform(y_test)
 
             # Criar datasets (normalmente o dataset adiciona a dimensão da feature)
-            train_dataset = PowerSeriesDataset(X_train_scaled, y_train_scaled)
-            test_dataset = PowerSeriesDataset(X_test_scaled, y_test_scaled)
+            # train_dataset = PowerSeriesDataset(X_train_scaled, y_train_scaled)
+            # test_dataset = PowerSeriesDataset(X_test_scaled, y_test_scaled)
 
             # 6. Criar DataLoaders
-            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            # train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+            # test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
             dataset = PowerSeriesDataset(X, y)
 
-            return train_loader, test_loader
+            return dataset
 
 
     def create_date_feats(self, df):
@@ -123,7 +124,8 @@ def create_sliding_windows_and_targets(signal, window_size=100, predict_steps=1)
     return np.array(X_windows), np.array(y_targets)
 
 
-def create_freq_transform(X, log=False, plot=False, transform_method='wavelets'):
+def create_freq_transform(
+        X, log=False, plot=False, transform_method='wavelets', scales=np.arange(0.5, 10, 0.1)):
 
     coefficients_list = []
 
@@ -138,7 +140,6 @@ def create_freq_transform(X, log=False, plot=False, transform_method='wavelets')
             # Parameters for CWT
             # Choose Haar wavelet for CWT
             wavelet = 'mexh'
-            scales = np.arange(0.5, 10, 0.1)  # Range of scales to analyze, adjust as needed
 
             # Perform CWT
             coefficients, frequencies = pywt.cwt(signal, scales, wavelet)
