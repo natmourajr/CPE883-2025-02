@@ -1,27 +1,6 @@
-"""
-LSTM.
-
-Summary:
-
-Considerations:
-    - 
-
-Improvement Sugestions:
-    - 
-    
-
-version: 0.0.1
-date: 13/07/2025
-
-copyright Copyright (c) 2025
-
-References:
-[1] 
-
-"""
 import os
 import sys
-sys.path.append("/home/felipe/doutorado/CPE883-2025-02/models/LSTM/LSTM_model/")
+sys.path.append("/home/felipe/doutorado/CPE883-2025-02/models/GRU/GRU_model/")
 sys.path.append("/home/felipe/doutorado/CPE883-2025-02/dataloaders/CEEMDAN/")
 file = 'final_la_haute_R0711.csv'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
@@ -30,11 +9,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 from collector import Collector
-from LSTM_model import LSTMPredictor
+from GRU_model import GRUPredictor
 
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset'
-    
+
 
 def train_model(model, train_loader, test_loader, epochs=20, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -73,11 +52,10 @@ def train_model(model, train_loader, test_loader, epochs=20, lr=1e-3):
     return train_losses, val_losses
 
 
-def LSTM():
+def GRU(predict_steps=1):
     # Parameters
     serie_size = -1
     window_size = 50    # Number of examples in each time series batch
-    predict_steps = 1
     batch_size = 32
     epochs = 20
 
@@ -88,11 +66,11 @@ def LSTM():
 
     # Dataset & DataLoader
     ceemdan_collector = Collector(base_path)
-    train_loader, test_loader  = ceemdan_collector.read_data(
+    train_loader, test_loader = ceemdan_collector.read_data(
         file, serie_size, window_size, predict_steps, batch_size, freq_transform=False
     )
 
-    model = LSTMPredictor(input_size, hidden_size, num_layers, output_size)
+    model = GRUPredictor(input_size, hidden_size, num_layers, output_size)
 
     # Train
     train_loss, val_loss = train_model(model, train_loader, test_loader, epochs=epochs)
@@ -128,6 +106,6 @@ def LSTM():
     plt.show()
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
 
-   LSTM()
+    GRU()

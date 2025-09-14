@@ -77,8 +77,7 @@ def train_model(model, train_loader, test_loader, epochs=20, lr=1e-3):
     return train_losses, val_losses
 
 
-if __name__ == "__main__":
-
+def CNN():
     np.random.seed(42)
 
     # Parameters
@@ -137,3 +136,8 @@ if __name__ == "__main__":
     plt.legend()
     plt.title("Model Predictions vs Actual on Test Set")
     plt.show()
+
+
+if __name__ == "__main__":
+
+    CNN()
