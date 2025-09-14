@@ -1202,7 +1202,8 @@ class FlexBertForDiffusionLM(FlexBertPreTrainedModel):
             mask_tokens = labels != self.loss_fn.ignore_index
             output = output[mask_tokens]
             labels = labels[mask_tokens]
-            p_mask = p_mask[mask_tokens]
+            if p_mask is not None:
+                p_mask = p_mask[mask_tokens]
             total_tokens = input_ids.shape[0]
         
 
