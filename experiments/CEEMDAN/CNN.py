@@ -33,96 +33,87 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from sklearn.model_selection import TimeSeriesSplit
 from collector import Collector
 from Reg_CNN import CNNRegressor
+
+from utils import train_model
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset'
 
 
-# 5. Training loop
-def train_model(model, train_loader, test_loader, epochs=20, lr=1e-3):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
-
-    train_losses, val_losses = [], []
-
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            preds = model(xb)
-            loss = criterion(preds, yb)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-        train_losses.append(train_loss / len(train_loader))
-
-        # validation
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for xb, yb in test_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                preds = model(xb)
-                loss = criterion(preds, yb)
-                val_loss += loss.item()
-        val_losses.append(val_loss / len(test_loader))
-
-        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_losses[-1]:.4f} | Val Loss: {val_losses[-1]:.4f}")
-
-    return train_losses, val_losses
-
-
-def CNN():
+def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20, test_ratio=0.2,
+        folds=2, scales=np.arange(1, 10, 1)):
+    
     np.random.seed(42)
-
-    # Parameters
-    serie_size = -1
-    window_size = 50    # Number of examples in each time series batch
-    predict_steps = 1
-    scales = np.arange(1, 31)  # 30 scales
-    batch_size = 32
-    epochs = 20
 
     # Dataset & DataLoader
     ceemdan_collector = Collector(base_path)
-    dataset = ceemdan_collector.read_data(file, serie_size, window_size, predict_steps)
+    dataset = ceemdan_collector.read_data(
+        file, serie_size, window_size, predict_steps, scales=scales
+        )
 
-    # Time-based split: no shuffling
-    split = int(0.8 * len(dataset))
-    train_ds = torch.utils.data.Subset(dataset, range(0, split))
+    split = int(len(dataset) * (1 - test_ratio))
+    train_val_ds = torch.utils.data.Subset(dataset, range(split))
     test_ds = torch.utils.data.Subset(dataset, range(split, len(dataset)))
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
-    # CNN Model
-    input_shape = train_ds[0][0].shape  # (1, S, T)
-    model = CNNRegressor(input_shape, output_size=predict_steps)
+    # -----------------------------
+    # Validação cruzada temporal
+    # -----------------------------
+    tscv = TimeSeriesSplit(n_splits=folds)
+    val_losses_all = []
 
-    # Train
-    train_loss, val_loss = train_model(model, train_loader, test_loader, epochs=epochs)
+    for fold, (train_idx, val_idx) in enumerate(tscv.split(train_val_ds)):
+        print(f"Fold {fold+1}")
+        
+        train_ds = torch.utils.data.Subset(train_val_ds, train_idx)
+        val_ds = torch.utils.data.Subset(train_val_ds, val_idx)
+        
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+        
+        # Inicializa modelo novo
+        input_shape = train_ds[0][0].shape # (1, S, T)
+        model = CNNRegressor(input_shape, output_size=predict_steps)
+        
+        # Treina
+        train_loss, val_loss = train_model(model, train_loader, val_loader, epochs=epochs)
+        
+        val_losses_all.append(val_loss[-1])
+        
+        # Plot loss por fold
+        plt.plot(train_loss, label="Train Loss")
+        plt.plot(val_loss, label="Val Loss")
+        plt.title(f"Fold {fold+1} Loss")
+        plt.legend()
+        plt.show()
 
-    # Plot loss
-    plt.plot(train_loss, label="Train Loss")
-    plt.plot(val_loss, label="Val Loss")
-    plt.legend()
-    plt.title("Loss over epochs")
-    plt.show()
+    # Estatísticas da validação cruzada
+    mean_val_loss = np.mean(val_losses_all)
+    std_val_loss = np.std(val_losses_all)
+    print(f"Validação Cruzada: μ MSE = {mean_val_loss:.4f}, σ = {std_val_loss:.4f}")
 
-    # Evaluate final model on test set
-    model.eval()
+    # -----------------------------
+    # Treina modelo final em todo treino + val
+    # -----------------------------
+    full_train_loader = DataLoader(train_val_ds, batch_size=batch_size, shuffle=False)
+    input_shape = train_val_ds[0][0].shape
+    final_model = CNNRegressor(input_shape, output_size=predict_steps)
+    train_model(final_model, full_train_loader, test_loader=None, epochs=epochs)  # Sem validação agora
+
+    # -----------------------------
+    # Avaliação no conjunto de teste
+    # -----------------------------
+    final_model.eval()
     preds = []
     actuals = []
 
     with torch.no_grad():
         for xb, yb in test_loader:
-            xb = xb.to(next(model.parameters()).device)
-            pred = model(xb).cpu().numpy()
+            xb = xb.to(next(final_model.parameters()).device)
+            pred = final_model(xb).cpu().numpy()
             preds.append(pred)
             actuals.append(yb.numpy())
 
@@ -136,6 +127,8 @@ def CNN():
     plt.legend()
     plt.title("Model Predictions vs Actual on Test Set")
     plt.show()
+
+    print("Finished...")
 
 
 if __name__ == "__main__":

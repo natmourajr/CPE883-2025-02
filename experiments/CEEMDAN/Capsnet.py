@@ -42,35 +42,30 @@ base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset'
 predict_steps = 1
 
 
-def Capsnet(predict_steps=1, batch_size=32, window_size = 50):
+def Capsnet(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20, test_ratio=0.2,
+        folds=2, scales=np.arange(1, 10, 1)):
+
+    print("Starting...")
 
     np.random.seed(42)
 
-    # Parameters
-    serie_size = -1
-    window_size = 50
-    scales = np.arange(1, 31)  # 30 scales
-    epochs = 20
-
     # Dataset & DataLoader
     ceemdan_collector = Collector(base_path)
-    dataset = ceemdan_collector.read_data(file, serie_size, window_size, predict_steps)
+    dataset = ceemdan_collector.read_data(
+        file, serie_size, window_size, predict_steps, scales=scales
+        )
 
-    
-    test_ratio = 0.2
     split = int(len(dataset) * (1 - test_ratio))
     train_val_ds = torch.utils.data.Subset(dataset, range(split))
     test_ds = torch.utils.data.Subset(dataset, range(split, len(dataset)))
 
-    batch_size = 32
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     # -----------------------------
     # Validação cruzada temporal
     # -----------------------------
-    tscv = TimeSeriesSplit(n_splits=5)
+    tscv = TimeSeriesSplit(n_splits=folds)
     val_losses_all = []
-
 
     for fold, (train_idx, val_idx) in enumerate(tscv.split(train_val_ds)):
         print(f"Fold {fold+1}")
@@ -82,7 +77,7 @@ def Capsnet(predict_steps=1, batch_size=32, window_size = 50):
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
         
         # Inicializa modelo novo
-        input_shape = train_ds[0][0].shape
+        input_shape = train_ds[0][0].shape # (1, S, T)
         model = CapsNetRegressor(input_shape, predict_steps=predict_steps)
         
         # Treina
@@ -103,7 +98,7 @@ def Capsnet(predict_steps=1, batch_size=32, window_size = 50):
     print(f"Validação Cruzada: μ MSE = {mean_val_loss:.4f}, σ = {std_val_loss:.4f}")
 
     # -----------------------------
-    # Treina modelo final em todo treino+val
+    # Treina modelo final em todo treino + val
     # -----------------------------
     full_train_loader = DataLoader(train_val_ds, batch_size=batch_size, shuffle=False)
     input_shape = train_val_ds[0][0].shape
@@ -134,6 +129,8 @@ def Capsnet(predict_steps=1, batch_size=32, window_size = 50):
     plt.legend()
     plt.title("Model Predictions vs Actual on Test Set")
     plt.show()
+
+    print("Finished...")
 
 
 if __name__=='__main__':
