@@ -5,11 +5,11 @@
 EPOCHS=100
 BATCH_SIZE=100
 LR=0.005
-WEIGHTS="/home/eduardo/doc/CPE883-2025-02/results_cifar100_20/vit/fold_4.pkl"
+WEIGHTS=""
 FOLDS=5
 DATA_DIR="/home/eduardo/doc/CPE883-2025-02/datasets/cifar100/"
 MODEL="vit"
-TEST=1
+TEST=0
 CIFAR_TYPE="100"
 CLASS_TYPE="superclass"  # or "superclass"
 
@@ -62,7 +62,7 @@ while [[ "$#" -gt 0 ]]; do
 	esac
 done
 
-CMD="python3 generate_confusion_matrix.py --epochs $EPOCHS --batch_size $BATCH_SIZE --lr $LR --folds $FOLDS --data_dir $DATA_DIR --model $MODEL --cifar_type $CIFAR_TYPE --test $TEST --class_type $CLASS_TYPE"
+CMD="python3 runner.py --epochs $EPOCHS --batch_size $BATCH_SIZE --lr $LR --folds $FOLDS --data_dir $DATA_DIR --model $MODEL --cifar_type $CIFAR_TYPE --test $TEST --class_type $CLASS_TYPE"
 if [[ -n "$WEIGHTS" ]]; then
 	CMD+=" --weights $WEIGHTS"
 fi

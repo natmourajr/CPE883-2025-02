@@ -5,10 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAPSNET_SCRIPT="$SCRIPT_DIR/cifar_capsnet.py"
 DATA_DIR="../../../datasets/cifar100"
 SAVE_DIR="$SCRIPT_DIR/result"
-WEIGHTS="/home/eduardo/doc/CPE883-2025-02/results_cifar100_100/capsnet/trained_model_1.pkl"  
+WEIGHTS="/home/eduardo/doc/CPE883-2025-02/results_cifar100_20/capsnet/trained_model_0.pkl"  
 TEST=1
 CIFAR_TYPE="100"
-CLASS_TYPE="class"  # or "superclass"
+CLASS_TYPE="superclass"  # or "superclass"
 
 # Default arguments
 BATCH_SIZE=100
