@@ -34,13 +34,13 @@ from sklearn.model_selection import TimeSeriesSplit
 from collector import Collector
 from LSTM_model import LSTMPredictor
 
-from utils import train_model
+from utils import train_model, NormalizedDataset
 
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset'
 
 
-def LSTM(serie_size=-1, window_size=50, predict_steps=1, batch_size=32, epochs=20,
+def LSTM(serie_size=-1, window_size=50, predict_steps=1, batch_size=32, epochs=5,
         input_size=1, hidden_size=64, num_layers=2, output_size=1, test_ratio=0.2,
         folds=2):
 
@@ -56,6 +56,16 @@ def LSTM(serie_size=-1, window_size=50, predict_steps=1, batch_size=32, epochs=2
     split = int(len(dataset) * (1 - test_ratio))
     train_val_ds = torch.utils.data.Subset(dataset, range(split))
     test_ds = torch.utils.data.Subset(dataset, range(split, len(dataset)))
+
+    # Nomalizacao
+    train_ds = NormalizedDataset(train_val_ds, fit=True)
+    # Reutiliza média/std do treino
+    test_ds = NormalizedDataset(
+        test_ds,
+        mean_X=train_ds.mean_X, std_X=train_ds.std_X,
+        mean_y=train_ds.mean_y, std_y=train_ds.std_y,
+        fit=False
+    )
 
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
     
@@ -89,7 +99,7 @@ def LSTM(serie_size=-1, window_size=50, predict_steps=1, batch_size=32, epochs=2
         plt.legend()
         plt.show()
 
-        # Estatísticas da validação cruzada
+    # Estatísticas da validação cruzada
     mean_val_loss = np.mean(val_losses_all)
     std_val_loss = np.std(val_losses_all)
     print(f"Validação Cruzada: μ MSE = {mean_val_loss:.4f}, σ = {std_val_loss:.4f}")
