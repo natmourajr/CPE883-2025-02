@@ -69,8 +69,8 @@ from transformers.models.bert.modeling_bert import BertPreTrainedModel
 
 from bert_padding import index_put_first_axis
 
-from .activation import get_act_fn
-from .attention import (
+from src.bert_layers.activation import get_act_fn
+from src.bert_layers.attention import (
     FlexBertPaddedAttention,
     FlexBertPaddedParallelAttention,
     FlexBertPaddedRopeAttention,
@@ -80,15 +80,15 @@ from .attention import (
     FlexBertUnpadRopeAttention,
     FlexBertUnpadRopeParallelAttention,
 )
-from .configuration_bert import FlexBertConfig
-from .embeddings import (
+from src.bert_layers.configuration_bert import FlexBertConfig
+from src.bert_layers.embeddings import (
     BertAlibiEmbeddings,
     FlexBertAbsoluteEmbeddings,
     FlexBertCompiledSansPositionEmbeddings,
     FlexBertSansPositionEmbeddings,
     get_embedding_layer,
 )
-from .initialization import (
+from src.bert_layers.initialization import (
     ModuleType,
     TileLinear,
     TileMode,
@@ -97,7 +97,7 @@ from .initialization import (
     tile_linear,
     tile_norm,
 )
-from .layers import (
+from src.bert_layers.layers import (
     BertAlibiEncoder,
     BertPooler,
     BertPredictionHeadTransform,
@@ -112,10 +112,10 @@ from .layers import (
     FlexBertUnpadPreNormLayer,
     get_encoder_layer,
 )
-from .loss import get_loss_fn
-from .mlp import FlexBertGLU, FlexBertMLP, FlexBertParallelGLU
-from .normalization import get_norm_layer
-from .padding import pad_input, unpad_input
+from src.bert_layers.loss import get_loss_fn
+from src.bert_layers.mlp import FlexBertGLU, FlexBertMLP, FlexBertParallelGLU
+from src.bert_layers.normalization import get_norm_layer
+from src.bert_layers.padding import pad_input, unpad_input
 
 from efficient_kan import KANLinear
 
@@ -1011,26 +1011,26 @@ class DiffusionLoss(nn.Module):
         super().__init__()
         self.ignore_index = ignore_index
 
-    def forward_new(self, logits, labels, masked_indices, p_mask, attention_mask):
+    def forward(self, logits, labels, masked_indices, p_mask, attention_mask, total_tokens):
         # logits: (batch, seq_len, vocab_size)
         # labels: (batch, seq_len)
         # masked_indices: (batch, seq_len) boolean
         # p_mask: (batch, seq_len) float
 
-        logits_flat = logits.view(-1, logits.size(-1))
+        #logits_flat = logits.view(-1, logits.size(-1))
 
         token_loss = F.cross_entropy(
-            logits_flat,
+            logits,
             labels,
             reduction='none'
         ) / p_mask
 
-        loss = token_loss.sum() / len(logits_flat) # Maybe do len(labels) or something
+        loss = token_loss.sum() / total_tokens # Maybe do len(labels) or something
         return loss
     
     
     
-    def forward(self, logits, labels, masked_indices, p_mask, attention_mask):
+    def forward_old(self, logits, labels, masked_indices, p_mask, attention_mask):
         # logits: (batch, seq_len, vocab_size)
         # labels: (batch, seq_len)
         # masked_indices: (batch, seq_len) boolean
@@ -1192,6 +1192,19 @@ class FlexBertForDiffusionLM(FlexBertPreTrainedModel):
             max_seqlen=max_seqlen,
         )
 
+        
+        if self.masked_prediction and labels is not None:
+            # flatten labels and output first
+            labels = labels.view(-1)
+            output = output.view(labels.shape[0], -1)
+
+            # then filter out the non-masked tokens
+            mask_tokens = labels != self.loss_fn.ignore_index
+            output = output[mask_tokens]
+            labels = labels[mask_tokens]
+            p_mask = p_mask[mask_tokens]
+            total_tokens = input_ids.shape[0]
+        
 
         if self.compile_model:
             logits = self.compiled_head(output)
@@ -1231,7 +1244,7 @@ class FlexBertForDiffusionLM(FlexBertPreTrainedModel):
                         labels=labels,
                     )
             elif masked_indices is not None and p_mask is not None:
-                loss = self.loss_fn(logits, labels, masked_indices, p_mask, attention_mask)
+                loss = self.loss_fn(logits, labels, masked_indices, p_mask, attention_mask, total_tokens)
             # Used to handle eval the same as the masked language model
             else:
                 loss = self.masked_loss_fn(logits, labels)
@@ -1979,3 +1992,4 @@ def init_mlm_model_from_pretrained(
         )
     else:
         tile_linear(pretrained_model.decoder, new_model.decoder, linear_type=TileLinear.default, mode=mode)
+
