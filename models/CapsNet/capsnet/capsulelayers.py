@@ -64,7 +64,7 @@ class DenseCapsule(nn.Module):
 
         # The prior for coupling coefficient, initialized as zeros.
         # b.size = [batch, out_num_caps, in_num_caps]
-        b = Variable(torch.zeros(x.size(0), self.out_num_caps, self.in_num_caps)).cuda()
+        b = torch.zeros(x.size(0), self.out_num_caps, self.in_num_caps, device=x.device)
 
         assert self.routings > 0, "The 'routings' should be > 0."
         for i in range(self.routings):

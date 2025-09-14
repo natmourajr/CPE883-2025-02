@@ -27,13 +27,13 @@ import os
 from torch.utils.data import Subset, DataLoader
 from sklearn.model_selection import StratifiedKFold
 from tqdm import tqdm
+import torch.nn.functional as F
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class CapsuleNet(nn.Module):
     """
-    A Capsule Network on CIFAR-10.
     :param input_size: data size = [channels, width, height]
     :param classes: number of classes
     :param routings: number of routing iterations
@@ -49,16 +49,27 @@ class CapsuleNet(nn.Module):
         self.routings = routings
 
         # Layer 1: Just a conventional Conv2D layer
-        self.conv1 = nn.Conv2d(input_size[0], 256, kernel_size=9, stride=1, padding=0)
+        self.conv1 = nn.Conv2d(
+            input_size[0], input_size[1], kernel_size=3, stride=2, padding=1
+        )
+        self.conv2 = nn.Conv2d(
+            in_channels=input_size[1],
+            out_channels=input_size[1] * 2,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+        )
 
         # Layer 2: Conv2D layer with `squash` activation, then reshape to [None, num_caps, dim_caps]
         self.primarycaps = PrimaryCapsule(
-            256, 256, 8, kernel_size=9, stride=2, padding=0
+            input_size[1] * 2, 64, 8, kernel_size=5, stride=2, padding=0
         )
+
+        in_num_caps = self._get_primary_caps_output_size()
 
         # Layer 3: Capsule layer. Routing algorithm works here.
         self.digitcaps = DenseCapsule(
-            in_num_caps=32 * 8 * 8,  # 32 channels, 8x8 spatial size after convs
+            in_num_caps=in_num_caps,  # 32 channels, 8x8 spatial size after convs
             in_dim_caps=8,
             out_num_caps=classes,
             out_dim_caps=16,
@@ -77,9 +88,19 @@ class CapsuleNet(nn.Module):
 
         self.relu = nn.ReLU()
 
+    def _get_primary_caps_output_size(self):
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 3, 32, 32)
+            # Passa pelo novo frontend sem pooling
+            x = F.relu(self.conv1(dummy_input))
+            x = F.relu(self.conv2(x))
+            x = self.primarycaps(x)
+            return x.size(1)
+
     def forward(self, x, y=None):
         device = x.device
-        x = self.relu(self.conv1(x))
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
         x = self.primarycaps(x)
         x = self.digitcaps(x)
         length = x.norm(dim=-1)
@@ -164,42 +185,99 @@ def plot_sample_predictions(
 
 
 def test(model, test_loader, args):
+    import seaborn as sns
+    from sklearn.metrics import confusion_matrix
+
     model.eval()
     test_loss = 0
     correct = 0
+    all_preds = []
+    all_labels = []
+    n_classes = model.classes if hasattr(model, "classes") else 10
     for x, y in test_loader:
         x, y = x.to(DEVICE), y.to(DEVICE)
-        y = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
-            1, y.to(DEVICE).view(-1, 1), 1.0
+        y_onehot = torch.zeros(y.size(0), n_classes, device=DEVICE).scatter_(
+            1, y.view(-1, 1), 1.0
         )
         with torch.no_grad():
-            y_pred, x_recon = model(x)
-        test_loss += caps_loss(y, y_pred, x, x_recon, args.lam_recon).item() * x.size(0)
-        y_pred = y_pred.max(1)[1]
-        y_true = y.max(1)[1]
-        correct += y_pred.eq(y_true).cpu().sum()
+            y_pred, x_recon = model(x, y_onehot)
+        test_loss += caps_loss(
+            y_onehot, y_pred, x, x_recon, args.lam_recon
+        ).item() * x.size(0)
+        y_pred_label = y_pred.max(1)[1]
+        correct += y_pred_label.eq(y).cpu().sum()
+        all_preds.extend(y_pred_label.cpu().numpy())
+        all_labels.extend(y.cpu().numpy())
 
     test_loss /= len(test_loader.dataset)
+
+    # Confusion matrix
+    try:
+        cm = confusion_matrix(all_labels, all_preds)
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(
+            cm,
+            annot=False,  # No numbers
+            cmap="crest",
+            square=True,  # Square cells
+            cbar_kws={"shrink": 0.8, "label": "Count"},
+        )
+        plt.xlabel("Predicted", fontsize=14)
+        plt.ylabel("True", fontsize=14)
+        plt.title("Confusion Matrix - capsnet", fontsize=16)
+        plt.tight_layout()
+        os.makedirs("result/capsnet", exist_ok=True)
+        plt.savefig("result/capsnet/confusion_matrix_test.png", dpi=200)
+        plt.close()
+        print("Confusion matrix saved to result/capsnet/confusion_matrix_test.png")
+
+    except Exception as e:
+        print(f"Could not save confusion matrix: {e}")
+
     return test_loss, correct / len(test_loader.dataset)
 
 
-def run_kfold(dataset, model, args, k=5, shuffle=True):
+def run_kfold(
+    dataset,
+    args,
+    k=5,
+    input_size=[3, 32, 32],
+    n_classes=100,
+    routings=3,
+    shuffle=True,
+):
     targets = np.array(dataset.targets)
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=11)
     classes = dataset.classes
+    print(f"Classes: {classes}, Number of classes: {n_classes}")
     fold_accuracies = []
     fold_loss = []
     for fold, (train_idx, val_idx) in enumerate(
         skf.split(np.zeros(len(targets)), targets)
     ):
+        model = CapsuleNet(
+            input_size=input_size,
+            classes=n_classes,
+            routings=routings,
+        )
+        model.to(DEVICE)
+        print(model)
         train_subset = Subset(dataset, train_idx)
         val_subset = Subset(dataset, val_idx)
         train_loader = DataLoader(
-            train_subset, batch_size=args.batch_size, shuffle=shuffle
+            train_subset, batch_size=args.batch_size, shuffle=shuffle, num_workers=8
         )
-        val_loader = DataLoader(val_subset, batch_size=args.batch_size, shuffle=False)
+        val_loader = DataLoader(
+            val_subset, batch_size=args.batch_size, shuffle=False, num_workers=8
+        )
         best_val_acc, best_val_loss = train(
-            model, train_loader, val_loader, args, fold, classes
+            model,
+            train_loader,
+            val_loader,
+            args,
+            fold,
+            classes,
+            n_classes,
         )
         fold_accuracies.append(best_val_acc)
         fold_loss.append(best_val_loss)
@@ -218,7 +296,7 @@ def run_kfold(dataset, model, args, k=5, shuffle=True):
     return
 
 
-def train(model, train_loader, val_loader, args, fold_n, classes):
+def train(model, train_loader, val_loader, args, fold_n, classes, n_classes):
     """
     Training a CapsuleNet
     :param model: the CapsuleNet model
@@ -231,7 +309,8 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
 
     logfile = open(args.save_dir + "/log.csv", "w")
     logwriter = csv.DictWriter(
-        logfile, fieldnames=["epoch", "loss", "val_loss", "val_acc", "fold"]
+        logfile,
+        fieldnames=["epoch", "loss", "val_loss", "val_acc", "fold", "train_time"],
     )
     logwriter.writeheader()
 
@@ -253,7 +332,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
             tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
         ):  # batch training
             x, y = x.to(DEVICE), y.to(DEVICE)
-            y = torch.zeros(y.size(0), 10, device=DEVICE).scatter_(
+            y = torch.zeros(y.size(0), n_classes, device=DEVICE).scatter_(
                 1, y.view(-1, 1), 1.0
             )
 
@@ -272,6 +351,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
         losses.append(epoch_loss)
         val_losses.append(val_loss)
         val_accs.append(val_acc)
+        train_time = time() - ti
         logwriter.writerow(
             dict(
                 epoch=epoch,
@@ -279,6 +359,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
                 val_loss=val_loss,
                 val_acc=val_acc,
                 fold=fold_n,
+                train_time=train_time,
             )
         )
         logfile.flush()
@@ -332,6 +413,7 @@ def train(model, train_loader, val_loader, args, fold_n, classes):
                 model.state_dict(), args.save_dir + f"/epoch{epoch}_fold{fold_n}.pkl"
             )
             print(f"best val_acc increased to {best_val_acc:.4f}")
+            patience_counter = 0
         else:
             patience_counter += 1
             print(

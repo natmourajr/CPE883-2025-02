@@ -1,16 +1,21 @@
-from cifar import CIFAR10Loader
+from cifar import CIFAR100Dataset
 
 if __name__ == "__main__":
-    # Set the path to the extracted CIFAR-10 directory
-    root = "../../../datasets/cifar10"
-    # Instantiate loader for training set
-    train_loader = CIFAR10Loader(root=root, train=True)
-    print(f"Train set size: {len(train_loader)}")
-    img, label = train_loader[0]
-    print(f"First train image shape: {img.shape}, label: {label}")
+    data_root = "datasets/cifar100"
 
-    # Instantiate loader for test set
-    test_loader = CIFAR10Loader(root=root, train=False)
-    print(f"Test set size: {len(test_loader)}")
-    img, label = test_loader[0]
-    print(f"First test image shape: {img.shape}, label: {label}")
+    # Instantiate the dataset
+    dataset = CIFAR100Dataset(root=data_root, train=True, superclass=True)
+
+    # Print number of classes and class names
+    print(f"Number of classes: {len(dataset.classes)}")
+    print("Class names:")
+    for idx, name in enumerate(dataset.classes):
+        print(f"{idx}: {name}")
+
+    # Print a few sample targets
+    print("\nSample targets from the dataset:")
+    for i in range(10):
+        img, target = dataset[i]
+        print(
+            f"Sample {i}: class index={target.item()}, class name={dataset.classes[target.item()]}"
+        )
