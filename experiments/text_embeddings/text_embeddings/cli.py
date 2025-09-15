@@ -103,6 +103,37 @@ def extract_composer_embeddings(
         batch_size=batch_size,
     )
 
+@app.command()
+def extract_llada_embeddings(
+    model_name: str,
+    model_path: Path,
+    output_path: Path | None = None,
+    batch_size: int = 32,
+):
+
+    from .embeddings_llada_opt import LLaDA_8B_Extractor
+    extractor = LLaDA_8B_Extractor()
+    extractor.load_model()
+
+    if output_path is None:
+        output_path = Path(f"data/embeddings/{model_name.replace('/', '_')}_embeddings.h5")
+
+    print(f'Saving to {output_path}')
+
+    if not output_path.parent.exists():
+        output_path.parent.mkdir(parents=True)
+
+    loader = hf_dataset_loader.TwentyNewsgroupsDataset()
+
+    print("Extracting embeddings...")
+    embedding_generator.extract_embeddings_to_hdf5(
+        loader=loader,
+        extractor=extractor,
+        model_name=model_name,
+        output_path=str(output_path),
+        batch_size=batch_size,
+    )
+
 
 @app.command()
 def train_tokenizer(
