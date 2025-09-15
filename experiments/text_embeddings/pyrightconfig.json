@@ -1,0 +1,6 @@
+{
+  "extraPaths": [
+    "../../dataloaders/hf_dataset_loader"
+  ],
+  "venvPath": "./.venv"
+}
