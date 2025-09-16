@@ -24,7 +24,7 @@ def get_image_transforms(image_size=224, is_train=False):
         # Ex: Rotações aleatórias, inversões horizontais, etc.
         transform_pipeline = transforms.Compose([
             transforms.Resize((image_size, image_size)),
-            transforms.RandomHorizontalFlip(), # Inverte a imagem horizontalmente com 50% de chance
+            #transforms.RandomHorizontalFlip(), # Inverte a imagem horizontalmente com 50% de chance
             transforms.RandomRotation(10),     # Rotaciona a imagem em até 10 graus
             transforms.ToTensor(),
             transforms.Normalize(mean=imagenet_mean, std=imagenet_std)

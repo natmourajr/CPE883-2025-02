@@ -1,4 +1,4 @@
-# experiments/CKAN/run_experiment.py
+# experiments/Vit_Xray/run_experiment.py
 
 import yaml
 import torch
@@ -12,23 +12,23 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset, DataLoader
-# Adiciona o diretório raiz do projeto ao path do Python para encontrar os módulos
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..',)))
+# Adiciona o diretório raiz do projeto ao path do Python
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
-from models.CKAN.ckan import CKAN
+from models.ViT_Xray.vit_baseline import ViTBaseline
 from dataloaders.xray.dataloader import TuberculosisDataset
-
 
 def load_config():
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     config_path = os.path.join(project_root, 'config.yaml')
     with open(config_path, 'r') as file:
         return yaml.safe_load(file)
-        
+
+
 def main():
     config = load_config()
-    model_name = "CKAN" # Mude para cada modelo
+    model_name = "ViT_Baseline"
     
     # ---  SETUP DO EXPERIMENTO  ---
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -67,7 +67,7 @@ def main():
     
     # --- EXECUÇÃO DA AVALIAÇÃO K-FOLD ---
     results = run_kfold_evaluation(
-        model_class=CKAN,
+        model_class=ViTBaseline,
         model_name=model_name, 
         config=config,
         experiment_dir=experiment_dir,
@@ -80,5 +80,6 @@ def main():
     with open(results_path, 'w') as f:
         yaml.dump(results, f)
     print(f"\nResultados de sumarização salvos em: {results_path}")
+
 if __name__ == '__main__':
     main()

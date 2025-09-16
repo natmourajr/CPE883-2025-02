@@ -1,15 +1,14 @@
-# config.yaml - Versão Corrigida e Comentada
+# config.yaml
 
 # ===================================================================
 # 1. PARÂMETROS DE DADOS E VALIDAÇÃO
 # ===================================================================
 dataset:
   # Caminho para a pasta que contém as imagens. 
-  # Mantido como você ajustou.
   path: "data/images"
   
   # Semente aleatória para garantir que a divisão do K-Fold seja reprodutível.
-  random_seed: 42
+  random_seed: 117
 
 cross_validation:
   n_splits: 10
@@ -18,7 +17,8 @@ cross_validation:
 # 2. PARÂMETROS DE PRÉ-PROCESSAMENTO
 # ===================================================================
 preprocessing:
-  image_size: 128
+  image_size: 224 # ViT
+  #image_size: 128 # Demais modelos
 
 # ===================================================================
 # 3. PARÂMETROS DE TREINAMENTO
@@ -30,8 +30,8 @@ training:
   batch_size: 4
   num_workers: 0
   
-  epochs: 100
-  early_stopping_patience: 10
+  epochs: 500
+  early_stopping_patience: 25
 
 # ===================================================================
 # 4. ARQUITETURAS DOS MODELOS
