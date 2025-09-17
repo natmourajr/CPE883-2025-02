@@ -1,7 +1,9 @@
 # CPE883-2025-02
 Repositório para ser utilizado para a disciplina do programa de engenharia elétrica da Coppe CPE883 Tópicos Especiais em Aprendizado De Máquina. Professor: Natanael Nunes de Moura Junior
 
+Neste repositório estão armazenados somente o módulo cifar_capsnet_5.py, dois arquivos .sh para rodar o módulo par o treinamento com k-fold e para o treinamento final (com holdout)/teste,e dois arquivos .bat com a mesma função, ambos visando apresentação de trabalho final de Antonio Alberto Moreira de Azevedo. 
 
-Neste repositório estão armazenados somente o módulo cifar_capsnet_5.py, e os dois arquivos .sh para rodar o módulo par o treinamento com k-fold e para o treinamento final (com holdout)/teste, visando apresentação de trabalho final de Antonio Alberto Moreira de Azevedo. 
+O módulo cifar_capsnet_5.py consolida as funcionalidades descritas na apresentação de Busca de hiperparâmetros (classe OptunaTuner), com k-fold, do otimizador (Adam, RMSprop e SGD) e da Taxa de aprendizagem (entre 1e-5 e 1e-1), e treino/teste do modelo com com os melhores parâmetros por Holdout (função run_single_training).
 
 Importante observar que o módulo cifar_capsnet_5.py chama o módulo capsnet_3.py, que se trata de uma modficação do módulo original capsnet.py com as funcionalidades do Automatic Mixed Precision (AMP) e do Gradescaler.
+
