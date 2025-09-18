@@ -19,6 +19,10 @@ class TrunkNet(nn.Module):
         self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim)
         )
 
@@ -33,6 +37,9 @@ class DeepONet(nn.Module):
         self.output_layer = nn.Linear(hidden_dim, output_dim)  # output_dim = passos futuros
 
     def forward(self, branch_input, trunk_input):
+        branch_input = branch_input.view(branch_input.size(0), -1)
+        trunk_input = trunk_input.view(trunk_input.size(0), -1)
+
         branch_out = self.branch_net(branch_input)   # [batch, hidden_dim]
         trunk_out = self.trunk_net(trunk_input)      # [batch, hidden_dim]
 
