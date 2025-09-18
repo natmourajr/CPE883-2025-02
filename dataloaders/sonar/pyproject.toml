@@ -1,0 +1,25 @@
+[project]
+name = "sonar-dataloader"
+version = "0.1.0"
+description = "Data loader for the 4Classes Dataset: hidrophone recordings of military ship noise."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy==1.26.4",
+    "torch==2.7.1",
+    "notebook==7.3",
+    "alive-progress==3.2",
+    "h5py==3.13",
+    "matplotlib==3.8",
+    "pandas==1.5.3",
+    "pydantic==2.10",
+    "scikit-learn==1.6",
+    "seaborn==0.13",
+    "wandb==0.21.4",
+    "scikit-dimension==0.3.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.1",
+]
