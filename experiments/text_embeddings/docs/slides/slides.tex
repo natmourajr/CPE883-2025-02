@@ -1,0 +1,301 @@
+\documentclass{beamer}
+
+% --- Pacotes essenciais (seguros com o tema SINTEF) ---
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc} % remova se compilar com XeLaTeX/LuaLaTeX
+\usepackage[portuguese]{babel}
+\usepackage{lmodern}
+\usepackage{amsmath,amsfonts}
+\usepackage{oldgerm} % você já usava; pode remover se não precisar
+
+% --- Tema e fontes ---
+\usetheme{sintef}
+\usefonttheme[onlymath]{serif}
+
+% --- Math Bold Font ---
+\usepackage{bm} % carregar depois de todas as fontes
+
+% --- Macros do seu template/exemplos ---
+\newcommand{\testcolor}[1]{\colorbox{#1}{\textcolor{#1}{test}}~\texttt{#1}}
+\newcommand{\hrefcol}[2]{\textcolor{cyan}{\href{#1}{#2}}}
+
+% --- Title background (versão estrelada, antes do \maketitle) ---
+\titlebackground*{assets/background}
+
+% --- Bibliografia: mostrar número do item ---
+\setbeamertemplate{bibliography item}{\insertbiblabel}
+
+% --- Remove subtítulos de frames ---
+\makeatletter
+  \def\beamer@checkframetitle{\@ifnextchar\bgroup\beamer@inlineframetitle{}}
+\makeatother
+
+% --- Metadados ---
+\title{Aprendizado de Representações com Modelos de Linguagem}
+\author{Felipe Grael}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{frame}{Contexto}
+
+	\begin{columns}[t]
+
+		\column{0.5\textwidth}
+		\vspace{-5mm}
+
+    \begin{center}
+    \textbf{Objetivo}
+    \end{center}
+
+    Derivar \textbf{representações vetoriais} de documentos respeitando relações semânticas.
+
+    \small
+    \begin{itemize}
+      \item Similaridade: documentos similares devem ter vetores próximos
+      \item Recuperação: obter documentos relevantes para um contexto
+      \item \textbf{Clusterização / Tópicos}: descobrir agrupamentos e assuntos em comum entre documentos
+    \end{itemize}
+
+		\column{0.5\textwidth}
+		\vspace{-5mm}
+
+    \begin{center}
+    \textbf{Histórico}
+    \end{center}
+    \small
+    \begin{itemize}
+      \item Vector Space Model e TF-IDF trabalham somente com presença de palavras.
+      \item \emph{Word Embeddings} começam a capturar valor semântico de palavras, mas sem contexto.
+      \item Modelos de Linguagem modernos, especialmente os Grandes (LLMs), se mostram promissores em capturar nuanças semânticas e contextuais.
+    \end{itemize}
+
+  \end{columns}
+
+\end{frame}
+
+
+\begin{frame}{Problema}
+
+	\begin{columns}[t]
+		\column{0.5\textwidth}
+		\vspace{-5mm}
+
+    \begin{center}
+    \textbf{Problema}
+    \end{center}
+
+    \small
+    \begin{itemize}
+      \item Modelos de linguagem geram boas representações para tokens, mas não para frases ou documentos.
+      \item Pode-se usar tokens especiais ou médias mas com eficácia limitada.
+      \item \textbf{Anisotropia} dos espaços de embedding: vetores tendem a se concentrar em subespaços estreitos.
+
+        \begin{itemize}
+          \item \textbf{Todos os vetores possuem similaridade alta!}
+        \end{itemize}
+
+    \end{itemize}
+
+		\column{0.5\textwidth}
+		\vspace{-5mm}
+
+    \begin{center}
+    \textbf{Trabalhos Relacionados}
+    \end{center}
+
+    \small
+    \begin{itemize}
+      \item \textbf{Sentence BERT}\cite{reimers2019sentencebertsentenceembeddingsusing} - fine-tuning com "redes siamesas" para aprender similaridade entre sentenças.
+      \item \textbf{Contrastive Learning} - fine tuning com função custo que incentiva a proximidade de sentenças similares e distância entre sentenças diferentes.
+      \item Desafios em dataset de qualidade para fine-tuning, e abordagens de aumento de dados (\emph{data augmentation})
+    \end{itemize}
+
+	\end{columns}
+\end{frame}
+
+
+\begin{frame}{Características de LLM}
+
+  \begin{center}
+    \large\texttt{[BOS] I want to drink some orange \textbf{[MASK]} . [EOS]}
+  \end{center}
+
+  Preenchimento de máscara:
+
+  \begin{center}
+    \begin{tabular}{c|l}
+      Token & logits \\
+      \hline
+      \texttt{juice} & 14.73 \\
+      \texttt{\#\#s} & 10.829 \\
+      \texttt{wine} & 9.72 \\
+      \texttt{soda} & 9.25 \\
+      \texttt{tea} & 8.49
+    \end{tabular}
+  \end{center}
+
+\end{frame}
+
+
+\begin{frame}{Scaling Sentence Embedings with LLM \cite{jiang2024prompteol}\footnotemark}
+
+  \begin{center}
+    \large \texttt{This sentence: `` [text] '' means in one word `` [MASK] '' .}
+  \end{center}
+
+  \begin{itemize}
+    \item \textbf{PromptEOL} - \emph{Prompt-based method with Explicit One word Limitation}
+    \item Explora último estado interno antes da camada de saída do modelo como representação
+    \item Bons resultados em modelos abertos (OPT)
+    \item Trabalho explora few-shot e fine tuning também.
+  \end{itemize}
+
+  \footnotetext[1]{Findings of the Association for Computational Linguistics: EMNLP 2024}
+
+\end{frame}
+
+
+\begin{frame}{Método}
+
+  \textbf{Objetivo}: Avaliar clusterização por embeddings obtidos por PromptEOL.
+
+	\begin{columns}[t]
+
+		\column{0.5\textwidth}
+
+    \small
+    \begin{itemize}
+      \item Estudar dataset \textbf{20 Newsgroups}
+      \item Obter embeddings em diferentes modelos
+      \item Clusterização com K-means (+~bootstrapping)
+      \item Avaliação:
+
+      \begin{itemize}
+        \item Intrínseca: Silhouette
+        \item Extrínseca: Adjusted Rand Index (ARI)
+      \end{itemize}
+
+      \item Baseline: K-Means com TF-IDF
+    \end{itemize}
+
+		\column{0.5\textwidth}
+
+    Modelos:
+    \small
+    \begin{itemize}
+      \item BERT
+      \item BERT + KAN
+      \item LLaDA (Discrete Diffusion)
+    \end{itemize}
+
+    Somente com pré-treino, executando tarefa MLM (Masked Language Modeling).
+
+  \end{columns}
+
+\end{frame}
+
+
+\begin{frame}{20 Newsgroups}
+
+	\begin{columns}[t]
+
+		\column{0.7\textwidth}
+    \small
+    \begin{itemize}
+      \item 18331 documentos
+      \item Pré-processados para remover cabeçalhos
+      \item Truncados para o número máximo de tokens do modelo
+    \end{itemize}
+
+		\column{0.3\textwidth}
+		\vspace{-5mm}
+    \tiny
+    \begin{itemize}
+      \item alt.atheism
+      \item comp.graphics
+      \item comp.os.ms-windows.misc
+      \item comp.sys.ibm.pc.hardware
+      \item comp.sys.mac.hardware
+      \item comp.windows.x
+      \item misc.forsale
+      \item rec.autos
+      \item rec.motorcycles
+      \item rec.sport.baseball
+      \item rec.sport.hockey
+      \item sci.crypt
+      \item sci.electronics
+      \item sci.med
+      \item sci.space
+      \item soc.religion.christian
+      \item talk.politics.guns
+      \item talk.politics.mideast
+      \item talk.politics.misc
+      \item talk.religion.misc
+    \end{itemize}
+
+  \end{columns}
+
+\end{frame}
+
+\begin{frame}{Pipeline}
+  \begin{figure}[h]
+    \centering
+    \includegraphics[height=1.1\textheight]{assets/pipeline.png}
+  \end{figure}
+\end{frame}
+
+\begin{frame}{Resultados}
+  \centering
+  \tiny
+  \begin{tabular}{ l | c | c | c | c }
+    Modelo & Arquitetura & Embedding & Silhouette & ARI \\
+    \hline
+    TF-IDF                     & -                       & $5000$   & $ 0.0097 \  \sigma\!=\!0.0005 $ & $ 0.085 \  \sigma = 0.0078 $ \\
+    bert-base-uncased (OPT)    & $ l=12, h=12, 109.5M $ & $768$    & $ 0.049  \  \sigma\!=\!0.002  $ & $ \mathbf{0.26} \  \sigma = 0.006 $ \\
+    bert-small                 & $ l=6, h=6, 22.5M $    & $384$    & $ \mathbf{0.10}   \  \sigma\!=\!0.002  $ & $ 0.01 \  \sigma = 0.0006 $ \\
+    bert-smaller               & $ l=6, h=4, 8.6M $     & $192$    & $ 0.024  \  \sigma\!=\!0.002  $ & $ 0.06 \  \sigma = 0.002  $ \\
+    modernbert-1.5b            & $ l=6, h=4, 8.6M $     & $192$    & $ 0.013  \  \sigma\!=\!0.001  $ & $ 0.05 \  \sigma = 0.0003  $ \\
+    modernbert-kan-1.5b        & $ l=6, h=4, 8.6M $     & $192$    & $ 0.011  \  \sigma\!=\!0.001  $ & $ 0.004 \  \sigma = 0.0003  $ \\
+    modernbert-diffusion-1.5b  & $ l=6, h=4, 8.6M $     & $192$    & $ 0.012  \  \sigma\!=\!0.001  $ & $ 0.005 \  \sigma = 0.0003  $ \\
+    LLaDA-8B-Base              & $ l=32, h=32, 8B $     & $126336$ &  ? & ?
+  \end{tabular}
+
+\end{frame}
+
+\begin{frame}{Resultados - bert-small}
+
+  \begin{center}
+    Projecão t-SNE dos embeddings obtidos com \texttt{bert-small}, com melhor Silhouette.
+  \end{center}
+
+  \begin{figure}[h]
+    \centering
+    \includegraphics[height=\textheight]{assets/bert-small-tsne.png}
+  \end{figure}
+
+
+\end{frame}
+
+\begin{frame}{Conclusões}
+
+  \begin{itemize}
+    \item Resultados tendem a melhorar com mais dados de pré-treino
+    \item Possibilidade de controlar tokenização com modelos pré-treinados com volumes médios de dados
+    \item Método promissor para exploração de relações semânticas com nuançadas
+  \end{itemize}
+
+\end{frame}
+
+%===========================
+% REFERÊNCIAS
+%===========================
+\begin{frame}[allowframebreaks]
+	\frametitle{Referências Bibliográficas}
+	\bibliographystyle{ieeetr}
+	\bibliography{presentation_bib.bib}
+\end{frame}
+
+\end{document}

@@ -1,21 +1,23 @@
 # experiments/CapsNet/run_experiment.py
-
 import yaml
 import torch
+import torch.nn as nn
+from torchvision import models
 import sys
 import os
 from datetime import datetime
 import shutil
-from contextlib import redirect_stdout
-# gerar nova imgem docker com o torchinfo
-#from torchinfo import summary 
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from torch.utils.data import Subset, DataLoader
 # Adiciona o diretório raiz do projeto ao path do Python para encontrar os módulos
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..','..')))
 
 from modules.Evaluation.evaluator import run_kfold_evaluation
 from models.CapsNet.capsnet_xray import CapsNetStrided
 from models.CapsNet.losses_xray import CapsuleLoss 
-
+from dataloaders.xray.dataloader import TuberculosisDataset
 
 def load_config():
     """Carrega o arquivo de configuração da raiz do projeto."""
@@ -25,59 +27,85 @@ def load_config():
         return yaml.safe_load(file)
         
 def main():
-    # --- 1. SETUP DO EXPERIMENTO ---
+    # ---  SETUP DO EXPERIMENTO ---
     config = load_config()
-    model_name = "CapsNet_Strided"
+    model_name = "CapsNet_Strided" # Nome do modelo para pastas e logs
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     experiment_dir = f"results/{model_name}/{timestamp}"
     os.makedirs(experiment_dir, exist_ok=True)
     print(f"Artefatos deste experimento serão salvos em: {experiment_dir}")
 
     # Salva uma cópia da configuração usada para reprodutibilidade
-    shutil.copy('config.yaml', os.path.join(experiment_dir, 'config.yaml'))
-    
-
-    image_size = config['preprocessing']['image_size']
-
-    # --- 2. SALVAR RESUMO DA ARQUITETURA ---
     try:
-        # Passa a seção de config específica da CapsNet
-        model_instance = CapsNetStrided(model_config=config['architectures'], num_classes=2)
-        batch_size = config['training']['batch_size']
-        image_size = config['preprocessing']['image_size']
-        input_size = (batch_size, 3, image_size, image_size)
-        architecture_summary_path = os.path.join(experiment_dir, 'architecture_summary.txt')
-        
-        with open(architecture_summary_path, 'w') as f:
-            with redirect_stdout(f):
-                #summary(model_instance, input_size=input_size, col_names=["input_size", "output_size", "num_params", "trainable"])
-                print("torchinfo nao disponivel nesta versao")
-        #print(f"Resumo da arquitetura salvo em: {architecture_summary_path}")
-        print("torchinfo nao disponivel nesta versao")
-    except Exception as e:
-        print(f"Não foi possível salvar o resumo da arquitetura: {e}")
+        shutil.copy('config.yaml', os.path.join(experiment_dir, 'config.yaml'))
+    except FileNotFoundError:
+        print("AVISO: 'config.yaml' não encontrado na raiz. Não foi possível salvá-lo.")
 
-    # --- 3. CONFIGURAÇÃO DA PERDA (LOSS) ---
-    # 3. LÊ O VALOR DE LAMBDA DO CONFIG, NÃO DEIXA FIXO NO CÓDIGO
+    # ---  NOVA LÓGICA: DIVISÃO DO CONJUNTO DE TESTE FINAL (HOLD-OUT) ---
+    print("\n--- Separando o conjunto de Teste Final (Hold-Out) ---")
+    
+    # Carrega os metadados completos
+    full_dataset_metadata = TuberculosisDataset(data_dir=config['dataset']['path']).metadata
+    
+    # Cria as faixas etárias e a "super-categoria" para estratificação
+    age_bins = [0, 20, 40, 60, 100]
+    age_labels = ['0-20', '21-40', '41-60', '61+']
+    full_dataset_metadata['age_group'] = pd.cut(full_dataset_metadata['age'], bins=age_bins, labels=age_labels, right=True).astype(str)
+    full_dataset_metadata['stratify_group'] = full_dataset_metadata['gender'] + '_' + full_dataset_metadata['age_group'] + '_label_' + full_dataset_metadata['label'].astype(str)
+
+    all_indices = list(range(len(full_dataset_metadata)))
+    
+    # Divide os ÍNDICES do dataframe em desenvolvimento e teste final
+    dev_indices, holdout_indices = train_test_split(
+        all_indices,
+        test_size=100, # Define o tamanho do conjunto de teste final
+        random_state=config['dataset']['random_seed'],
+        stratify=full_dataset_metadata['stratify_group']
+    )
+    
+    print(f"Dataset dividido: {len(dev_indices)} amostras para Desenvolvimento (Treino/Validação com K-Fold)")
+    print(f"Dataset dividido: {len(holdout_indices)} amostras para Teste Final (Hold-Out)")
+    
+    # Salva os índices para referência
+    np.save(os.path.join(experiment_dir, 'holdout_indices.npy'), holdout_indices)
+    
+    # ---  CONFIGURAÇÃO DA PERDA (LOSS) ---
+    image_size = config['preprocessing']['image_size']
     lam_recon_scale = config['architectures']['CapsNet']['lambda_reconstruction']
     lam_recon = lam_recon_scale * (image_size ** 2)
     capsule_loss = CapsuleLoss(lam_recon=lam_recon)
 
-    # --- 4. EXECUÇÃO DA AVALIAÇÃO ---
+    # ---  EXECUÇÃO DA AVALIAÇÃO K-FOLD ---
+    # A avaliação agora acontece apenas no conjunto de desenvolvimento
     results = run_kfold_evaluation(
         model_class=CapsNetStrided, 
         model_name=model_name, 
         config=config,
         experiment_dir=experiment_dir,
+        dev_indices=dev_indices,       # <-- Passa os índices de desenvolvimento
+        holdout_indices=holdout_indices, # <-- Passa os índices do teste final
         criterion=capsule_loss
     )
 
-    # --- 5. SALVAMENTO DOS RESULTADOS ---
+    # ---  SALVAMENTO DOS RESULTADOS ---
     results_path = os.path.join(experiment_dir, 'summary_results.json')
     with open(results_path, 'w') as f:
-        yaml.dump(results, f)
+        yaml.dump(results, f, indent=4)
     print(f"\nResultados de sumarização salvos em: {results_path}")
 
+    # ---  SELEÇÃO DO MELHOR MODELO ---
+    print("\n--- Selecionando o Melhor Modelo do K-Fold ---")
+    validation_aucs = [fold_result.get('auc_validation', 0.0) for fold_result in results.get('fold_results', [])]
+    if validation_aucs:
+        best_fold_index = np.argmax(validation_aucs)
+        best_fold_number = best_fold_index + 1
+        best_model_source_path = os.path.join(experiment_dir, f"fold_{best_fold_number}", 'best_model.pt')
+        final_model_dest_path = os.path.join(experiment_dir, 'final_best_model.pt')
+        try:
+            shutil.copy(best_model_source_path, final_model_dest_path)
+            print(f"Melhor modelo (Fold {best_fold_number}) copiado para: {final_model_dest_path}")
+        except FileNotFoundError:
+            print(f"ERRO: Não foi possível encontrar o arquivo do melhor modelo.")
 
 if __name__ == '__main__':
     main()

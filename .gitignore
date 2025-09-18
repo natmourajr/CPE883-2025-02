@@ -6,6 +6,7 @@ datasets/
 *.txt
 *.jpeg
 *.jpg
+*.pt
 
 # Repository paths
 dataloaders/benchmark/3w_dataset/data/
@@ -213,3 +214,4 @@ download_data.py
 cpe883_latest.sif
 results/
 experiments/cnn_test
+plot_comparison_roc.py

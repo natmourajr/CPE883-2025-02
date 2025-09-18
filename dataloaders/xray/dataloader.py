@@ -1,59 +1,93 @@
 # modules/DataLoader/dataloader.py
 
 import os
-from PIL import Image
 import pandas as pd
+from PIL import Image
 from torch.utils.data import Dataset
 import torch
 
 class TuberculosisDataset(Dataset):
     """
-    Dataset customizado para o dataset de Raio-X de Tuberculose (Shenzhen).
-    VERSÃO SIMPLIFICADA PARA VALIDAÇÃO CRUZADA.
-    Esta classe agora representa o DATASET COMPLETO. A divisão em treino/validação
-    é feita externamente  no módulo Evaluation.
+    Dataset customizado que agora lê os metadados (incluindo idade e gênero)
+    de um arquivo CSV.
     """
     def __init__(self, data_dir, transform=None):
         """
         Args:
-            data_dir (string): Diretório contendo a pasta 'images'.
-            transform (callable, optional): Transformações a serem aplicadas.
+            data_dir (string): Diretório que contém a pasta 'images'.
+            transform (callable, optional): Transformações a serem aplicadas na imagem.
         """
         self.data_dir = data_dir
         self.transform = transform
         self.image_dir = os.path.join(self.data_dir, 'images')
-        self.metadata = self._load_metadata_as_dataframe()
-
-    def _load_metadata_as_dataframe(self):
-        """ Carrega os metadados e retorna como um DataFrame do Pandas. """
-        image_files = os.listdir(self.image_dir)
-        data = []
-        for file_name in image_files:
-            if file_name.endswith(('.png', '.jpg', '.jpeg')):
-                label = int(file_name.split('_')[-1].split('.')[0])
-                data.append({'file_name': file_name, 'label': label})
         
-        df = pd.DataFrame(data)
+        metadata_path = 'data/shenzhen_metadata.csv'
+        self.metadata = self._load_metadata_from_csv(metadata_path)
+
+    def _load_metadata_from_csv(self, csv_path):
+        """
+        Carrega os metadados do arquivo CSV e os processa.
+        """
+        try:
+            df = pd.read_csv(csv_path)
+            print(f"Metadados carregados com sucesso de: {csv_path}")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"ERRO: Arquivo de metadados não encontrado em '{csv_path}'. Verifique o caminho.")
+
+        # Renomeia colunas para consistência interna no projeto
+        if 'study_id' in df.columns:
+            df = df.rename(columns={'study_id': 'file_name', 'sex': 'gender'})
+        
+        # Garante que o nome do arquivo inclua a extensão .png se não tiver
+        if not df['file_name'].iloc[0].endswith('.png'):
+            df['file_name'] = df['file_name'] + '.png'
+
+        # 0 para 'normal', 1 para qualquer outra coisa (tuberculose)
+        df['label'] = df['findings'].apply(lambda x: 0 if x == 'normal' else 1)
+
         print(f"Dataset completo carregado: {len(df)} imagens.")
+        
+        # Garante que as colunas necessárias existem
+        required_cols = ['file_name', 'gender', 'age', 'label']
+        if not all(col in df.columns for col in required_cols):
+            raise ValueError(f"O CSV precisa conter colunas que resultem em: {required_cols}")
+            
         return df
 
     def __len__(self):
-        """ Retorna o número total de amostras no dataset. """
         return len(self.metadata)
 
     def __getitem__(self, idx):
-        """ Busca e retorna uma amostra do dataset no índice `idx`. """
+        """
+        Busca uma amostra completa: imagem e todos os seus metadados.
+        """
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+            
         sample_info = self.metadata.iloc[idx]
         image_name = sample_info['file_name']
-        label = sample_info['label']
+        
+        label = torch.tensor(sample_info['label'], dtype=torch.long)
+        age = torch.tensor(sample_info['age'], dtype=torch.float32) # Idade como float
+        gender = sample_info['gender'] # Gênero como string ('Male'/'Female')
         
         image_path = os.path.join(self.image_dir, image_name)
         
-        image = Image.open(image_path).convert('RGB')
+        try:
+            image = Image.open(image_path).convert('RGB')
+        except FileNotFoundError:
+            print(f"ERRO GRAVE: A imagem '{image_name}' listada nos metadados não foi encontrada em '{self.image_dir}'")
+            # Retorna None para que possa ser filtrado depois, se necessário
+            return None 
 
         if self.transform:
             image = self.transform(image)
         
-        label = torch.tensor(label, dtype=torch.long)
+        # Retorna a imagem e um dicionário com os metadados
+        metadata_dict = {
+            'label': label,
+            'age': age,
+            'gender': gender
+        }
         
-        return image, label
+        return image, metadata_dict

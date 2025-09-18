@@ -1,4 +1,4 @@
-# modules/Models/ckan.py
+# models/ckan.py
 
 import torch.nn as nn
 
