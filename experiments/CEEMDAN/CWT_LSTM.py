@@ -1,5 +1,5 @@
 """
-Time series CNN for a regression problem.
+Hybrid LSTM for scalogram inputs.
 
 Summary:
 
@@ -7,9 +7,7 @@ Considerations:
     - 
 
 Improvement Sugestions:
-    - Try a regularization: Include a dropout layer to prevent overfitting, or a L2 regularization in optimizer (validation loss is not decreasing).
-    - Decrease the model complexity.
-    - Normalized scalograms the data before the model inputation.
+    - 
     
 
 version: 0.0.1
@@ -21,10 +19,9 @@ References:
 [1] 
 
 """
-
 import os
 import sys
-sys.path.append("/home/felipe/doutorado/CPE883-2025-02/models/CNN/Reg_CNN/")
+sys.path.append("/home/felipe/doutorado/CPE883-2025-02/models/LSTM/LSTM_model/")
 sys.path.append("/home/felipe/doutorado/CPE883-2025-02/dataloaders/CEEMDAN/")
 file = 'final_la_haute_R0711.csv'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
@@ -37,30 +34,62 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import mean_squared_error
 from collector import Collector
-from Reg_CNN import CNNRegressor
+from LSTM_model import LSTMPredictor
 
 from utils import train_model, NormalizedDataset
+
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset'
 
 
-def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20, test_ratio=0.2,
-        folds=4, transform_method='wavelets', scales=np.arange(0.5, 10, 0.1)):
+# -----------------------------
+# Modelo híbrido LSTM
+# -----------------------------
+class HybridLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, output_size, n_freqs):
+        super(HybridLSTM, self).__init__()
+        self.n_freqs = n_freqs
+        self.lstm_list = nn.ModuleList([
+            nn.LSTM(input_size=input_size, hidden_size=hidden_size, 
+                    num_layers=num_layers, batch_first=True) 
+            for _ in range(n_freqs)
+        ])
+        self.fc = nn.Linear(hidden_size * n_freqs, output_size)
+        
+    def forward(self, x):
+        # x: [batch, 1, window_size, freqs]
+        x = x.squeeze(1)  # [batch, window_size, freqs]
+        lstm_outs = []
+        for i in range(self.n_freqs):
+            xi = x[:, :, i].unsqueeze(-1)  # [batch, window, 1]
+            out, _ = self.lstm_list[i](xi)
+            lstm_outs.append(out[:, -1, :])  # pega último hidden state
+        h = torch.cat(lstm_outs, dim=1)  # concatena todas frequências
+        return self.fc(h)  # [batch, output_size]
+
+
+# -----------------------------
+# Função principal
+# -----------------------------
+def LSTM_hybrid(serie_size=-1, window_size=6, predict_steps=1, batch_size=32, epochs=20,
+                input_size=1, hidden_size=32, num_layers=2, output_size=1, test_ratio=0.2,
+                folds=4, transform_method='stft', scales=np.arange(100, 150, 1)):
     
     np.random.seed(42)
 
     # Dataset & DataLoader
     ceemdan_collector = Collector(base_path)
-    
     dataset  = ceemdan_collector.read_data(
-        file, serie_size, window_size, predict_steps, batch_size,
-        transform_method=transform_method, scales=scales
+        file, serie_size, window_size, predict_steps, batch_size, transform_method=transform_method,
+        scales=scales, freq_transform=True
     )
+
+    n_freqs = dataset.X.shape[-1]
 
     split = int(len(dataset) * (1 - test_ratio))
     train_val_ds = torch.utils.data.Subset(dataset, range(split))
     test_ds = torch.utils.data.Subset(dataset, range(split, len(dataset)))
-    
+
     # -----------------------------
     # Validação cruzada temporal
     # -----------------------------
@@ -84,13 +113,11 @@ def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
         
-        # Inicializa modelo novo
-        input_shape = train_ds[0][0].shape # (1, S, T)
-        model = CNNRegressor(input_shape, output_size=predict_steps)
+        # Inicializa modelo híbrido
+        model = HybridLSTM(input_size, hidden_size, num_layers, output_size, n_freqs)
         
         # Treina
         train_loss, val_loss = train_model(model, train_loader, val_loader, epochs=epochs)
-        
         val_losses_all.append(val_loss[-1])
         
         # Plot loss por fold
@@ -103,13 +130,12 @@ def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20
     # Estatísticas da validação cruzada
     mean_val_loss = np.mean(val_losses_all)
     std_val_loss = np.std(val_losses_all)
-    rmse_all = np.sqrt(val_losses_all)         # RMSE por fold
+    rmse_all = np.sqrt(val_losses_all)
     mean_rmse = np.mean(rmse_all)
     std_rmse = np.std(rmse_all)
 
     print(f"Validação Cruzada: μ MSE = {mean_val_loss:.4f}, σ MSE = {std_val_loss:.4f}")
     print(f"Validação Cruzada: μ RMSE = {mean_rmse:.4f}, σ RMSE = {std_rmse:.4f}")
-
 
     # -----------------------------
     # Treina modelo final em todo treino + val
@@ -125,21 +151,17 @@ def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20
 
     start_time = time.time()
     full_train_loader = DataLoader(train_val_ds, batch_size=batch_size, shuffle=False)
-    input_shape = train_val_ds[0][0].shape # (1, S, T)
-    final_model = CNNRegressor(input_shape, output_size=predict_steps)
-    train_model(final_model, full_train_loader, test_loader=None, epochs=epochs)  # Sem validação agora
+    final_model = HybridLSTM(input_size, hidden_size, num_layers, output_size, n_freqs)
+    train_model(final_model, full_train_loader, test_loader=None, epochs=epochs)
     end_time = time.time()
     
-    train_time = end_time - start_time
-    print(f"Tempo de treino final: {train_time:.2f} segundos")
-
+    print(f"Tempo de treino final: {end_time - start_time:.2f} segundos")
 
     # -----------------------------
     # Avaliação no conjunto de teste
     # -----------------------------
     final_model.eval()
-    preds = []
-    actuals = []
+    preds, actuals = [], []
 
     with torch.no_grad():
         for xb, yb in test_loader:
@@ -153,7 +175,6 @@ def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20
 
     mse = mean_squared_error(actuals, preds)
     rmse = np.sqrt(mse)
-
     print(f"MSE final no conjunto de teste: {mse:.6f}")
     print(f"RMSE final no conjunto de teste: {rmse:.6f}")
 
@@ -162,12 +183,11 @@ def CNN(predict_steps=1, serie_size=-1, batch_size=32, window_size=50, epochs=20
     plt.plot(actuals, label="True")
     plt.plot(preds, label="Predicted")
     plt.legend()
-    plt.title("Model Predictions vs Actual on Test Set")
+    plt.title("Predições vs Real no Test Set")
     plt.show()
 
     print("Finished...")
 
 
-if __name__ == "__main__":
-
-    CNN()
+if __name__=='__main__':
+    LSTM_hybrid()

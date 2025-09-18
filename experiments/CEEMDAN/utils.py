@@ -2,6 +2,9 @@
 import torch
 import torch.nn as nn
 
+import numpy as np
+from matplotlib import pyplot as plt
+
 # 5. Training loop
 def train_model(model, train_loader, test_loader, epochs=20, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -72,4 +75,51 @@ class NormalizedDataset(torch.utils.data.Dataset):
         X = (X - self.mean_X) / (self.std_X + 1e-8)
         y = (y - self.mean_y) / (self.std_y + 1e-8)
         return X, y
+    
 
+# coeffs: (n_scales, T), signal: (T,)
+def corr_per_scale(coeffs, signal, scales, plot=False):
+    n_scales = coeffs.shape[0]
+    cors = np.zeros(n_scales)
+    for i in range(n_scales):
+        a = coeffs[i]
+        # zscore rápido
+        a = (a - a.mean()) / (a.std() + 1e-9)
+        s = (signal - signal.mean()) / (signal.std() + 1e-9)
+        cors[i] = np.corrcoef(s, a)[0,1]
+
+    # escalas ordenadas por |correlation|
+    order = np.argsort(np.abs(cors))[::-1]
+    print("Top escalas:", order[:10])
+    print("Correlação top:", cors[order[:10]])
+    
+    if plot:
+        n_scales = len(cors)
+        plt.figure(figsize=(10,5))
+        plt.plot(scales, cors, marker='o', label='Correlação por escala')
+        top10_idx = order[:10]  # índices no array cors
+        plt.scatter(scales[top10_idx], cors[top10_idx], color='red', s=80, zorder=5, label='Top 10 escalas')  # destaca top 10
+        plt.xlabel('Escala')
+        plt.ylabel('Correlação com o target')
+        plt.title('Correlação entre cada escala e o target')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        plt.show()
+    return cors
+
+
+def coefs_analysis(coefficients):
+        # Verificando os coeficientes de entrada do modelo
+        plt.figure(figsize=(9, 5))
+        plt.plot(np.arange(0, len(coefficients[0])), coefficients[0])
+        plt.xlabel('samples', fontsize=12)
+        plt.ylabel('coefficients (scale)', fontsize=12)
+        plt.tight_layout()
+        plt.show()
+        plt.figure(figsize=(9, 5))
+        plt.plot(np.arange(0, len(coefficients[199])), coefficients[1])
+        plt.xlabel('samples', fontsize=12)
+        plt.ylabel('coefficients (scale)', fontsize=12)
+        plt.tight_layout()
+        plt.show()
