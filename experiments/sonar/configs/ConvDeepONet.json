@@ -1,0 +1,44 @@
+{
+    "method": "grid",
+    "metric": {
+        "goal": "maximize",
+        "name": "f1_score"
+    },
+    "parameters": {
+        "model_name": {
+            "value": "DeepONet-CNN-MLP"
+        },
+        "fold": {
+            "values": [0, 1, 2, 3, 4]
+        },
+        "conv_n_neurons": {
+            "values": [[16, 128]]
+        },
+        "conv_pooling_size": {
+            "values": [[2, 2]]
+        },
+        "conv_dropout": {
+            "values": [0]
+        },
+        "kernel_size": {
+            "values": [7]
+        },
+        "classification_n_neurons": {
+            "values": [32]
+        },
+        "classification_dropout": {
+            "values": [0]
+        },
+        "window_size": {"values": [16]},
+        "learning_rate": {"values": [0.0001]},
+        "hidden_channels": {
+            "values": [[64, 32]]
+        },
+        "dropout": {
+            "values": [0.2]
+        },
+        "embedding_dim": {
+            "values": [128]
+        }
+    }
+}

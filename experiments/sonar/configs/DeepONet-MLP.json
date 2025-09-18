@@ -1,0 +1,30 @@
+{
+    "method": "grid",
+    "metric": {
+        "goal": "maximize",
+        "name": "f1_score"
+    },
+    "parameters": {
+        "model_name": {
+            "value": "DeepONet-MLP"
+        },
+        "fold": {
+            "values": [0, 1, 2, 3, 4]
+        },
+        "learning_rate": {
+            "values": [0.0001]
+        },
+        "hidden_channels": {
+            "values": [[32], [64], [64, 32]]
+        },
+        "dropout": {
+            "values": [0, 0.2]
+        },
+        "window_size": {
+            "value": null
+        },
+        "embedding_dim": {
+            "values": [4, 8, 32]
+        }
+    }
+}

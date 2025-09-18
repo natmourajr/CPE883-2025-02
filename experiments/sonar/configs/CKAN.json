@@ -1,0 +1,27 @@
+{
+    "method": "grid",
+    "metric": {
+        "goal": "maximize",
+        "name": "f1_score"
+    },
+    "parameters": {
+        "model_name": {
+            "values": ["CKAN"]
+        },
+        "learning_rate": {
+            "values": [0.001]
+        },
+        "window_size": {
+            "values": [32]
+        },
+        "grid_size": {
+            "values": [3]
+        },
+        "dropout": {
+            "values": [0]
+        },
+        "fold": {
+            "values": [0, 1, 2, 3, 4]
+        }
+    }
+}

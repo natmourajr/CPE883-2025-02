@@ -1,0 +1,35 @@
+{
+    "method": "grid",
+    "metric": {
+        "goal": "maximize",
+        "name": "f1_score"
+    },
+    "parameters": {
+        "model_name": {
+            "value": "CNN"
+        },
+        "fold": {
+            "values": [0, 1, 2, 3, 4]
+        },
+        "conv_n_neurons": {
+            "values": [[16, 128], [32, 256], [32, 64, 256], [32, 64, 128, 256], [64, 512], [256, 32], [512, 64]]
+        },
+        "conv_pooling_size": {
+            "values": [[2, 2], [4, 2], [4, 4]]
+        },
+        "conv_dropout": {
+            "values": [0, 0.2, 0.4, 0.6]
+        },
+        "kernel_size": {
+            "values": [3, 5, 7]
+        },
+        "classification_n_neurons": {
+            "values": [32, 64, 128, 256, 512, 1024, 2048, [64, 32], [128, 64], [256, 64]]
+        },
+        "classification_dropout": {
+            "values": [0, 0.2, 0.4, 0.6]
+        },
+        "window_size": {"values": [16]},
+        "learning_rate": {"values": [0.0001]}
+    }
+}
