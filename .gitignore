@@ -215,3 +215,4 @@ cpe883_latest.sif
 results/
 experiments/cnn_test
 plot_comparison_roc.py
+experiments/sonar/results
