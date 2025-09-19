@@ -1,11 +1,5 @@
-# Cognite Time Series Toolkit
+# Modelo inspirado no artigo sobre o TS-Diffusion (Li, 2023)
 O pacote `tsdiffusion_transformed` reúne ferramentas de segmentação, modelagem neuro-simbólica e difusão para séries temporais industriais. Os módulos foram desenhados para funcionar em sequência, mas cada componente permanece independente para uso em pipelines Python próprios.
-
-## Dependências
-- Python 3.10 ou superior
-- PyTorch (com suporte opcional a CUDA)
-- NumPy, pandas e SciPy
-- scikit-learn
 
 Instale as bibliotecas com `pip install -r requirements.txt` na raiz do projeto ou instale manualmente os pacotes listados acima.
 
