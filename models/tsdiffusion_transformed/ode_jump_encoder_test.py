@@ -4,12 +4,10 @@ import torch.nn as nn
 import math
 
 class CrossAttention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int = 8, dropout: float = 0.0, kdim=None):
+    def __init__(self, d_model: int, n_heads: int = 8, dropout: float = 0.0):
         super().__init__()
         self.mha = nn.MultiheadAttention(
             embed_dim=d_model,
-            kdim=kdim or d_model,
-            vdim=kdim or d_model,
             num_heads=n_heads,
             dropout=dropout,
             batch_first=True  # (B, T, C)
@@ -40,65 +38,6 @@ class CrossAttention(nn.Module):
         x = self.norm(q + self.out(attn_out))
         return x, attn_weights  # attn_weights: (B, n_heads, T_q, T_kv) a partir do PyTorch 2.6+
 
-class TransformerGate(nn.Module):
-    """
-    Produz α_t,c em (0,1) a partir de [x, x_denoised, (x_denoised-x), mask].
-    Saída tem shape (B,T,C). Use dropout de fonte para forçar o uso de ambos sinais.
-    """
-    def __init__(self, hidden_dim: int, p_src_dropout: float = 0.1):
-        super().__init__()
-        self.p_src_dropout = p_src_dropout
-        # features por canal: [x, x_denoised, delta, mask] -> 4*C
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim*3, hidden_dim*6),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim*6, hidden_dim)   # logits por canal
-        )
-
-    def forward(self, h_gru, h_trf, train_mode: bool = True):
-        # concat por canal
-        delta = h_gru - h_trf
-        h = torch.cat([h_gru, h_trf, delta], dim=-1)  # (B,T,4*C)
-        logits = self.mlp(h)                            # (B,T,C)
-        alpha  = torch.sigmoid(logits)                      # (0,1)
-
-        # "source dropout": às vezes força só raw ou só denoised (melhora generalização)
-        if train_mode and self.p_src_dropout > 0.0:
-            # mesma máscara para todo o batch/time-step (poderia ser por amostra)
-            if torch.rand(1, device=h_gru.device) < (self.p_src_dropout / 2):
-                alpha = alpha.detach()*0  # 100% raw
-            elif torch.rand(1, device=h_gru.device) < (self.p_src_dropout / 2):
-                alpha = alpha.detach()*0 + 1  # 100% denoised
-
-        # fusão final
-        x_fused = alpha * h_gru + (1.0 - alpha) * h_trf
-        return x_fused, alpha
-
-class AttnMemory(nn.Module):
-    """
-    Atenção causal sobre uma memória local de estados (ou embeddings de x).
-    Q = h (B,H) -> (B,1,H), K,V = mem (B,K,H). Retorna contexto c (B,H).
-    """
-    def __init__(self, hidden_dim: int, n_heads: int = 4, attn_dropout: float = 0.1):
-        super().__init__()
-        self.mha = nn.MultiheadAttention(
-            embed_dim=hidden_dim, num_heads=n_heads,
-            dropout=attn_dropout, batch_first=True
-        )
-        self.norm = nn.LayerNorm(hidden_dim)  # estabiliza Q antes da MHA
-
-    def forward(self, h: torch.Tensor, mem: torch.Tensor) -> torch.Tensor:
-        # h: (B,H), mem: (B,K,H) (K pode ser 0)
-        if mem is None or mem.size(1) == 0:
-            return torch.zeros_like(h)
-        q = self.norm(h).unsqueeze(1)      # (B,1,H)
-        k = mem                            # (B,K,H) passado apenas (causal por construção)
-        v = mem
-        ctx, _ = self.mha(q, k, v, need_weights=False)  # (B,1,H)
-        return ctx.squeeze(1)              # (B,H)
-
-
-
 class JumpODEEncoder(nn.Module):
     """
     Self‑Attentive Jump‑ODE simplificado:
@@ -106,15 +45,12 @@ class JumpODEEncoder(nn.Module):
     - ODEFunc integra h(t) entre eventos.
     - Self‑attention usa máscara para faltantes (opcional).
     """
-    def __init__(self, in_dim, hidden_dim, mem_len: int = 32,
-                 n_heads: int = 4, attn_dropout: float = 0.1,
-                 attn_heads=4, num_layers=2, dropout=0.2, ff_dim=None):
+    def __init__(self, in_dim, hidden_dim, attn_heads=4, num_layers=2, dropout=0.1, ff_dim=None):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.mem_len = mem_len
+        self.attn_heads = attn_heads
         self.gru = nn.GRUCell(in_dim, hidden_dim)
         self.odefunc = ODEFunc(hidden_dim)
-        self.attn = AttnMemory(hidden_dim, n_heads=n_heads, attn_dropout=attn_dropout)
         enc_layer = nn.TransformerEncoderLayer(
             nhead=attn_heads,
             d_model=hidden_dim,
@@ -123,72 +59,56 @@ class JumpODEEncoder(nn.Module):
             dim_feedforward= self.hidden_dim * 4 or ff_dim,  # feedforward dimension
             batch_first=True,
         )
+
         self.transformer = nn.TransformerEncoder(
             enc_layer,
             num_layers=num_layers,
             norm=nn.LayerNorm(hidden_dim)
-        )    
-        self.t_film = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_dim, 2*hidden_dim)  # gamma, beta
-        )  
-        self.time_encoding = TimeHybridEncoding(hidden_dim)    
-        self.transformer_gate = TransformerGate(hidden_dim)
-        self.norm_gru = nn.LayerNorm(hidden_dim)
-        self.norm_H = nn.LayerNorm(hidden_dim)
-        self.norm_ode = nn.LayerNorm(hidden_dim)
+        )
         self.cross_attn = CrossAttention(hidden_dim,attn_heads)
-        self.cross_attn_denoised = CrossAttention(hidden_dim,attn_heads,kdim=in_dim)
+        self.time_encoding = TimeHybridEncoding(hidden_dim)
 
     @staticmethod
     def _causal_mask(L, device):
         # Máscara triangular superior (impede olhar para o futuro)
         return torch.triu(torch.full((L, L), float('-inf'), device=device), diagonal=1)    
-
-    @staticmethod
-    def _rk4_step(h, dt, f, c):
-        # RK4 com contexto c fixo no intervalo
-        k1 = f(h, c)
-        k2 = f(h + 0.5*dt*k1, c)
-        k3 = f(h + 0.5*dt*k2, c)
-        k4 = f(h + dt*k3, c)
-        return h + (dt/6.0)*(k1 + 2*k2 + 2*k3 + k4)
-
-    def forward(self, x, ts):
-        B, T, C = x.shape
-        #eps = 1e-6
-        h = torch.zeros(B, self.hidden_dim, device=x.device)
-        #mem = torch.zeros(B, 0, self.hidden_dim, device=x.device)  # memória causal curta
-        states = []
         
+    def forward(self, x, ts):
+        """
+        x  : (B, T, C)
+        ts : (B, T)   segundos unix (normalizados ou não)
+        """
+        B, T, _ = x.shape
+        h = torch.zeros(B, self.hidden_dim, device=x.device)
+        states = []
 
         for i in range(T):
             if i > 0:
-                dt = (ts[:, i] - ts[:, i-1]).float().unsqueeze(-1)  # (B,1)
-                # controle: mantenha simples. Use input anterior constante no intervalo
-                u = (x[:, i],x[:, i-1],(x[:, i]-x[:, i-1]) / dt)  # (B, C) — assuma C == hidden_dim quando este bloco recebe embedding
-                # RK4 em h, condicionado por u
-                k1 = self.odefunc(h, *u)
-                k2 = self.odefunc(h + 0.5*dt*k1, *u)
-                k3 = self.odefunc(h + 0.5*dt*k2, *u)
-                k4 = self.odefunc(h + dt*k3, *u)
-                h  = h + (dt/6.0)*(k1 + 2*k2 + 2*k3 + k4)
-                h = self.norm_ode(h)
+                dt_i = (ts[:, i] - ts[:, i-1]).float().unsqueeze(-1)  # (B,1)
+                delta_h = (x[:, i] - h) / dt_i
+                f1 = self.odefunc(delta_h)
+                f2 = self.odefunc(delta_h + 0.5*dt_i*f1)
+                f3 = self.odefunc(delta_h + 0.5*dt_i*f2)
+                f4 = self.odefunc(delta_h + dt_i*f3)
+                h  = h + (dt_i/6.0)*(f1 + 2*f2 + 2*f3 + f4)
+            states.append(h)
+            h=x[:, i]
+        H = torch.stack(states, dim=1)
+        h = torch.zeros(B, self.hidden_dim, device=x.device)
+        states = []
 
-            # JUMP no evento i (como no esquema original)
-            h = self.gru(x[:, i], h)
-            h = self.norm_gru(h)
+        for i in range(T):
+            h = self.gru(H[:, i], h)                                 # jump
             states.append(h)
 
-        h = torch.stack(states, dim=1)  # (B, T, hidden_dim)
-        #h,_ = self.cross_attn(h+tme,x+tme)
+        H = torch.stack(states, dim=1)   # (B, T, hidden_dim)
+        tm_e = self.time_encoding(ts)  # tempo contínuo
+        z = x + tm_e
 
-        gb = self.t_film(h)                       # (B,1,2D)
-        gamma, beta = gb.chunk(2, dim=-1)          # (B,1,D), (B,1,D)
-        tme = self.time_encoding(ts)
-        tme = (1.0 + gamma) * tme + beta         # FiLM no tempo contínuo
-        H = self.transformer(h+tme)
-        #H,_ = self.cross_attn(h_gru,h_trf)
+        # máscara causal (L,L) para o Transformer (batch_first=True)
+        causal = self._causal_mask(T, x.device)  # (T,T) com -inf acima da diagonal
+        z = self.transformer(z,mask=causal)
+        H,_ = self.cross_attn(H, z) # (B, T, hidden_dim)'''
         return H
 
 
@@ -267,13 +187,12 @@ class ODEJumpEncoder(ODEJump):
         denoised: bool = False,
         lam: list[float,float] = [0.9, 0.1],
         n_heads: int = 4,
-        n_layers: int = 4,
-        cost_columns: list = None                       
+        n_layers: int = 4                       
         ):
-        super().__init__(in_channels, hidden_dim, static_dim, denoised, lam, cost_columns)  # <- chama ODEJump.__init__
+        super().__init__(in_channels, hidden_dim, static_dim, denoised, lam)  # <- chama ODEJump.__init__
         # (daqui pra baixo você pode sobrescrever/estender o que quiser)
         
-        self.encoder_ode = JumpODEEncoder(hidden_dim, hidden_dim, n_heads=n_heads,num_layers=n_layers)
+        self.encoder_ode = JumpODEEncoder(hidden_dim, hidden_dim, attn_heads=n_heads, num_layers=n_layers)
 
     def forward(
         self,
@@ -294,40 +213,16 @@ class ODEJumpEncoder(ODEJump):
         """
         # Embedding de entrada
         if not already_latent:
-            if x_denoised is not None:
-                # aplique gate (treino=True quando model.training)
-                x_fused, _ = self.denoise_gate(x, x_denoised, mask, train_mode=self.training)
-                h_in = torch.cat([x_fused, mask], dim=-1)
-            else:
-                h_in = torch.cat([x, mask], dim=-1)
-            h = self.encoder(h_in)  # (B,T,hidden_dim)
+            h = self.encoder(torch.cat([x, mask] if x_denoised is None else [x,x_denoised,mask], dim=-1))
         # Static features
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
             h = h + se
         if timestamps is None:
             raise ValueError("timestamps são obrigatórios para Jump‑ODE Encoder")
-        #tm_e = self.time_encoding(timestamps.to(h.dtype)).to(h.dtype)  # tempo contínuo
-        #h = h + tm_e
+        
         h = self.encoder_ode(h, timestamps)
         state = h
         return state,self.decoder(state) if return_x_hat else None
                 
-    def train_cognite(self,*args,**kwargs):
-        # exemplo para ODEJumpEncoder: ajuste nomes conforme sua classe
-        transformer_params = []
-        base_params = []
-        for n,p in self.named_parameters():
-            if "transformer" in n or "encoder_ode" in n:  # bloco de atenção
-                transformer_params.append(p)
-            else:
-                base_params.append(p)
-
-        optimizer = torch.optim.AdamW([
-            {"params": base_params, "lr": 3e-4, "weight_decay": 1e-4},
-            {"params": transformer_params, "lr": 1.5e-4, "weight_decay": 1e-4},
-        ], betas=(0.9, 0.98))
-        kwargs['optimizer']=optimizer
-        
-        for res in super().train_cognite(*args,**kwargs):
-            yield res
+                    

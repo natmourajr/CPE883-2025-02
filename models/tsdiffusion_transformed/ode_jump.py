@@ -4,8 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Subset, TensorDataset, DataLoader, WeightedRandomSampler
 import numpy as np 
+import math
 max_drop = 0.7
-TS_SPAN = 60 * 60 * 24 * 365
+TS_SPAN = 60 * 60 * 24 * 30
 from sklearn.model_selection import StratifiedShuffleSplit  # manter se já importou, usamos só p/ seed-size; NÃO estratifica tempo
 
 # ---------- Helpers privados ----------
@@ -56,8 +57,39 @@ def _split_counts(n, train_frac, val_frac, test_frac, validate):
 
 
 
+class DenoiseGate(nn.Module):
+    """
+    Produz α_t,c em (0,1) a partir de [x, x_denoised, (x_denoised-x), mask].
+    Saída tem shape (B,T,C). Use dropout de fonte para forçar o uso de ambos sinais.
+    """
+    def __init__(self, in_channels: int, hidden: int = 64, p_src_dropout: float = 0.1):
+        super().__init__()
+        self.p_src_dropout = p_src_dropout
+        # features por canal: [x, x_denoised, delta, mask] -> 4*C
+        self.mlp = nn.Sequential(
+            nn.Linear(4 * in_channels, hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden, in_channels)   # logits por canal
+        )
 
+    def forward(self, x, x_den, mask, train_mode: bool = True):
+        # concat por canal
+        delta = x_den - x
+        feats = torch.cat([x, x_den, delta, mask], dim=-1)  # (B,T,4*C)
+        logits = self.mlp(feats)                            # (B,T,C)
+        alpha  = torch.sigmoid(logits)                      # (0,1)
 
+        # "source dropout": às vezes força só raw ou só denoised (melhora generalização)
+        if train_mode and self.p_src_dropout > 0.0:
+            # mesma máscara para todo o batch/time-step (poderia ser por amostra)
+            if torch.rand(1, device=x.device) < (self.p_src_dropout / 2):
+                alpha = alpha.detach()*0  # 100% raw
+            elif torch.rand(1, device=x.device) < (self.p_src_dropout / 2):
+                alpha = alpha.detach()*0 + 1  # 100% denoised
+
+        # fusão final
+        x_fused = alpha * x_den + (1.0 - alpha) * x
+        return x_fused, alpha
 
 
 
@@ -66,12 +98,12 @@ class ODEFunc(nn.Module):
     def __init__(self, hidden_dim):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.Linear(4*hidden_dim, 4*hidden_dim),
+            nn.SiLU(),
+            nn.Linear(4*hidden_dim, hidden_dim)
         )
-    def forward(self, h):          # t é obrigatório p/ torchdiffeq
-        return self.net(h)
+    def forward(self, h, x, x_last, slope_x):          # t é obrigatório p/ torchdiffeq
+        return self.net(torch.cat([h, x, x_last,slope_x], dim=-1))
         
         
 class JumpODE(nn.Module):
@@ -84,28 +116,34 @@ class JumpODE(nn.Module):
         self.hidden_dim = hidden_dim
         self.gru = nn.GRUCell(in_dim, hidden_dim)
         self.odefunc = ODEFunc(hidden_dim)
+        self.norm_ode = nn.LayerNorm(hidden_dim)
+        self.norm_gru = nn.LayerNorm(hidden_dim)
         
     def forward(self, x, ts):
-        """
-        x  : (B, T, C)
-        ts : (B, T)   segundos unix (normalizados ou não)
-        """
-        B, T, _ = x.shape
+        B, T, C = x.shape
+        eps = 1e-6
         h = torch.zeros(B, self.hidden_dim, device=x.device)
         states = []
 
         for i in range(T):
             if i > 0:
-                dt_i = (ts[:, i] - ts[:, i-1]).float().unsqueeze(-1)  # (B,1)
-                f1 = self.odefunc(h)
-                f2 = self.odefunc(h + 0.5*dt_i*f1)
-                f3 = self.odefunc(h + 0.5*dt_i*f2)
-                f4 = self.odefunc(h + dt_i*f3)
-                h  = h + (dt_i/6.0)*(f1 + 2*f2 + 2*f3 + f4)
-            h = self.gru(x[:, i], h)                                 # jump
+                dt = (ts[:, i] - ts[:, i-1]).float().unsqueeze(-1)  # (B,1)
+                # controle: mantenha simples. Use input anterior constante no intervalo
+                u = (x[:, i],x[:, i-1],(x[:, i]-x[:, i-1]) / dt)  # (B, C) — assuma C == hidden_dim quando este bloco recebe embedding
+                # RK4 em h, condicionado por u
+                k1 = self.odefunc(h, *u)
+                k2 = self.odefunc(h + 0.5*dt*k1, *u)
+                k3 = self.odefunc(h + 0.5*dt*k2, *u)
+                k4 = self.odefunc(h + dt*k3, *u)
+                h  = h + (dt/6.0)*(k1 + 2*k2 + 2*k3 + k4)
+                h = self.norm_ode(h)
+
+            # JUMP no evento i (como no esquema original)
+            h = self.gru(x[:, i], h)
+            h = self.norm_gru(h)
             states.append(h)
 
-        H = torch.stack(states, dim=1)   # (B, T, hidden_dim)
+        H = torch.stack(states, dim=1)  # (B, T, hidden_dim)
 
         return H
 
@@ -118,16 +156,18 @@ class ODEJump(nn.Module):
         hidden_dim: int = 256,
         static_dim: int = 0,
         denoised: bool = False,
-        lam: list[float,float] = [0.9, 0.1]
+        lam: list[float,float] = [0.9, 0.1],
+        cost_columns: list = None
         
     ):
+        self.cost_columns = cost_columns
         self.lam = lam
         super().__init__()
         self.val_loss = float('inf')
         self.model_dim = hidden_dim
         self.in_channels = in_channels
         self.encoder = nn.Sequential(
-            nn.Linear(in_channels*3 if denoised else in_channels*2, hidden_dim),
+            nn.Linear(in_channels*2, hidden_dim),
             nn.ReLU(),
         )
         self.decoder = nn.Sequential(
@@ -143,6 +183,7 @@ class ODEJump(nn.Module):
         self.odejump = JumpODE(hidden_dim, hidden_dim)
         # (d) m_b  — probabilidade de observação (Bernoulli) para L4
         self.miss_head = nn.Linear(self.model_dim, 1)
+        self.denoise_gate = DenoiseGate(in_channels=in_channels, hidden=64, p_src_dropout=0.1)
 
     def forward(
         self,
@@ -163,7 +204,14 @@ class ODEJump(nn.Module):
         """
         # Embedding de entrada
         if not already_latent:
-            h = self.encoder(torch.cat([x, mask] if x_denoised is None else [x, x_denoised, mask], dim=-1))
+            if x_denoised is not None:
+                # aplique gate (treino=True quando model.training)
+                x_fused, _ = self.denoise_gate(x, x_denoised, mask, train_mode=self.training)
+                h_in = torch.cat([x_fused, mask], dim=-1)
+            else:
+                h_in = torch.cat([x, mask], dim=-1)
+
+            h = self.encoder(h_in)  # (B,T,hidden_dim)
         # Static features
         if static_feats is not None and self.static_dim > 0:
             se = self.static_proj(static_feats).unsqueeze(1)  # (b,1,model_dim)
@@ -276,19 +324,19 @@ class ODEJump(nn.Module):
         mask: torch.Tensor,
         mask_train: torch.Tensor
     ):
-        #L1
+        #L1torch.sqrt((err**2) + 1e-6)
         mask_err = mask * (1 - mask_train) # erro ao longo dos C canais observados 
-        sse = ((x - x_hat)**2 * mask_err).sum(dim=-1) # (B,T) 
+        sse = (((x - x_hat)**2 * mask_err)+1e-6).sum(dim=-1) # (B,T) 
         nobs = mask_err.sum(dim=-1).clamp(min=1e-8) # -½ λ ||x-μ||^2 + ½ log λ
         L1 = sse.sum()
         # ----- L4 (máscara) -----
         # máscara binária: 1 se ao menos um canal está presente no timestep
                 # (B, T, 1)
         m_t = mask_train.any(dim=2, keepdim=True).float()              # (B,T,1)
-        mb_pred = torch.sigmoid(self.miss_head(state)).clamp(1e-4, 1-1e-4)  # (B, T, 1)
-        L4 = F.binary_cross_entropy(mb_pred, m_t, reduction='sum')
+        #mb_pred = torch.sigmoid().clamp(1e-4, 1-1e-4)  # (B, T, 1)
+        L4 = torch.nn.functional.binary_cross_entropy_with_logits(self.miss_head(state), m_t, reduction='sum')
         L1_div = nobs.sum().clamp(min=1.0)
-        L4_div = float(mb_pred.numel())
+        L4_div = float(m_t.numel())
         loss = self.lam[0]*L1/L1_div + self.lam[1]*L4/L4_div
 
         return (
@@ -344,14 +392,23 @@ class ODEJump(nn.Module):
             for batch in loader:
                 s = None; x_denoised = None
                 x, ts_batch, m = batch[0], batch[1], batch[2]  # x, ts_batch, m
+                cc = torch.ones_like(x)
                 if static:  
                     s = batch[3]
-                    if denoised is not None:
+                    if denoised:
                         x_denoised = batch[4]
+                        if self.cost_columns is not None:
+                            cc = batch[5]
+                    elif self.cost_columns is not None:
+                        cc = batch[4]
                 else:
-                    if denoised is not None:
+                    if denoised:
                         x_denoised = batch[3]
-                x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                        if self.cost_columns is not None:
+                            cc = batch[4]    
+                    elif self.cost_columns is not None:
+                        cc = batch[3]                    
+                x, ts_batch, m, cc = x.to(device), ts_batch.to(device), m.to(device), cc.to(device)
                 if s is not None: s = s.to(device)
                 if x_denoised is not None: x_denoised = x_denoised.to(device)
 
@@ -368,8 +425,8 @@ class ODEJump(nn.Module):
                 state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train, x_denoised=x_denoised_masked)
 
                 mask_err = m * (1.0 - m_train)
-                sse_bt  = ((x - x_hat)**2 * mask_err).sum(dim=(1, 2))               # (B,)
-                nobs_bt = mask_err.sum(dim=(1, 2)).clamp(min=1.0)                   # (B,)
+                sse_bt  = ((x - x_hat)**2 * mask_err * cc).sum(dim=(1, 2))               # (B,)
+                nobs_bt = (mask_err * cc).sum(dim=(1, 2)).clamp(min=1.0)                   # (B,)
                 mse_bt  = (sse_bt / nobs_bt).detach().cpu().numpy()
                 sse_bt  = sse_bt.detach().cpu().numpy()
                 nobs_bt = nobs_bt.detach().cpu().numpy()
@@ -486,22 +543,36 @@ class ODEJump(nn.Module):
             "per_group_counts": per_group_counts,
             "per_group_sum_nobs": per_group_sum_nobs
         }
-
     
-    @staticmethod
-    def _make_dataset(df, timestamp_col, window_size, feature_cols, static_features_cols, window_step=1,df_denoised=None):
+    def _make_dataset(self, df, timestamp_col, window_size, feature_cols, static_features_cols, window_step=1,df_denoised=None):
         if timestamp_col != 'index':
             df = df.sort_values(timestamp_col).reset_index(drop=True)
 # ---------------- NORMALIZAÇÃO DO TEMPO ----------------
         if timestamp_col != "index":
-            ts_raw = pd.to_datetime(df[timestamp_col]).astype("int64") / 1e9
+            ts_raw = pd.to_datetime(df[timestamp_col]).astype("int64") / 1e6
         else:
-            ts_raw = pd.to_datetime(df.index).astype("int64") / 1e9
+            ts_raw = pd.to_datetime(df.index).astype("int64") / 1e6
         t0 = ts_raw[0]
-        ts_rel = ((ts_raw - t0) / TS_SPAN).to_numpy(dtype=np.float32)               # começa em 0
+        ts_rel = ((ts_raw - t0)/TS_SPAN).to_numpy(dtype=np.float32)               # começa em 0
 
         times = torch.from_numpy(ts_rel)            # (L,)           # (L,)
+        if self.cost_columns is not None:
+            # subset de interesse e cópia real
+            cost = df.loc[:, feature_cols].copy()
+
+            # separa colunas que serão 1 e 0 (somente as que existem em feature_cols)
+            cols_1 = [c for c in feature_cols if c in self.cost_columns]
+            cols_0 = [c for c in feature_cols if c not in self.cost_columns]
+
+            # imputa o MESMO valor para TODAS as linhas
+            cost.loc[:, cols_0] = 0
+            cost.loc[:, cols_1] = 1
+            cost_np = cost.values
+            cost = torch.tensor(cost_np, dtype=torch.float32)
+        else:
+            cost = None
         values_np = df[feature_cols].values
+        
         mask_np   = ~pd.isna(values_np) 
         values_np = np.nan_to_num(values_np, nan=0.0)
         data  = torch.tensor(values_np, dtype=torch.float32)
@@ -519,6 +590,7 @@ class ODEJump(nn.Module):
             ts_seqs = times.unsqueeze(0)
             stat_seqs = static[0].unsqueeze(0) if static is not None else None
             mask_seqs = mask.unsqueeze(0)   # (1,L,C)
+            cost_seqs = cost.unsqueeze(0) if cost is not None else None
         else:
             starts = np.arange(0, len(df) - window_size + 1, window_step, dtype=int)
             seqs      = torch.stack([data[s:s+window_size]  for s in starts])
@@ -526,7 +598,8 @@ class ODEJump(nn.Module):
             ts_seqs   = torch.stack([times[s:s+window_size] for s in starts])
             mask_seqs = torch.stack([mask[s:s+window_size]  for s in starts])
             stat_seqs = static[0].unsqueeze(0).repeat(len(starts), 1) if static is not None else None
-        args = (arg for arg in [seqs, ts_seqs, mask_seqs, stat_seqs, seqs_denoised] if arg is not None)
+            cost_seqs = torch.stack([cost[s:s+window_size]  for s in starts]) if cost is not None else None
+        args = (arg for arg in [seqs, ts_seqs, mask_seqs, stat_seqs, seqs_denoised, cost_seqs] if arg is not None)
         return TensorDataset(*args)  # retorna Dataset com (seqs, ts_seqs, mask_seqs, stat_seqs, seqs_denoised) 
 
     # ---------- Novo método: train_cognite ----------
@@ -543,12 +616,13 @@ class ODEJump(nn.Module):
         epochs: int = 10,
         validate: bool = True,
         early_stopping: bool = True,
-        patience: int = 5,
+        patience: int = 10,
         device: torch.device = None,
         label_at: str = "end",
         fixed_test_idx: np.ndarray | None = None,
         seed_split: int = 42,
-        df_denoised: pd.DataFrame | None = None
+        df_denoised: pd.DataFrame | None = None,
+        optimizer = None
     ):
         device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         df_sorted = df if timestamp_col == "index" else df.sort_values(timestamp_col).reset_index(drop=True)
@@ -601,34 +675,65 @@ class ODEJump(nn.Module):
         print("GRUPOS (test): ", _count(y_win[test_idx]))
 
         # --- Treino + ES sempre no TESTE
-        optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9, 0.98), weight_decay=1e-4)
+        if optimizer is None:
+            optimizer = torch.optim.AdamW(self.parameters(), lr=lr, betas=(0.9, 0.98), weight_decay=1e-4)
+        steps_per_epoch = max(len(train_loader), 1)
+        total_steps     = max(epochs * steps_per_epoch, 1)
+        warmup_steps    = int(0.1 * total_steps)
+        min_lr_factor   = 0.10  # lr final = 0.1 × lr_base
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return (step + 1) / max(warmup_steps, 1)  # linear warmup
+            # cosine decay até min_lr_factor
+            progress = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
+            cosine = 0.5 * (1 + math.cos(math.pi * progress))
+            return min_lr_factor + (1 - min_lr_factor) * cosine
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         self.to(device)
         best_score = float("inf"); best_epoch = 0; wait = patience
 
         for ep in range(1, epochs + 1):
             self.train()
             total_train = [[0.0, 0.0] for _ in range(2)]  # L1, L4
-
+            scaler = torch.amp.GradScaler()
             for batch in train_loader:
                 s = None; x_denoised = None
                 x, ts_batch, m = batch[0], batch[1], batch[2]  # x, ts_batch, m
+                cc = torch.ones_like(x)
                 if static_features_cols:  
                     s = batch[3]
                     if df_denoised is not None:
                         x_denoised = batch[4]
+                        if self.cost_columns is not None:
+                            cc = batch[5]
+                    elif self.cost_columns is not None:
+                        cc = batch[4]
                 else:
                     if df_denoised is not None:
                         x_denoised = batch[3]
-                x, ts_batch, m = x.to(device), ts_batch.to(device), m.to(device)
+                        if self.cost_columns is not None:
+                            cc = batch[4]    
+                    elif self.cost_columns is not None:
+                        cc = batch[3]                    
+                x, ts_batch, m, cc = x.to(device), ts_batch.to(device), m.to(device), cc.to(device)
                 if s is not None: s = s.to(device)
                 if x_denoised is not None: x_denoised = x_denoised.to(device)
                 m_train = m.clone(); m_train[:, -1, :] = 0.0
                 x_masked = x * m_train
                 x_denoised_masked = x_denoised * m_train if x_denoised is not None else None
                 state, x_hat = self.forward(x_masked, timestamps=ts_batch, static_feats=s, return_x_hat=True, mask=m_train,x_denoised=x_denoised_masked)
-                loss, L1, L4 = self._compute_loss(x, x_hat, state, m, m_train)
+                optimizer.zero_grad(set_to_none=True)
+                with torch.amp.autocast(device_type='cuda'):
+                    loss, L1, L4 = self._compute_loss(x * cc, x_hat * cc, state, m, m_train)
 
-                optimizer.zero_grad(set_to_none=True); loss.backward(); optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()
                 for i, item in enumerate([L1, L4]):
                     total_train[i][0] += item[0]; total_train[i][1] += item[1]
 
