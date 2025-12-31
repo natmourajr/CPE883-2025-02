@@ -14,6 +14,7 @@ References:
 [1]
 """
 
+import sys
 import pandas as pd
 import os
 import numpy as np
@@ -23,6 +24,9 @@ from scipy.signal import stft
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 import torch
+
+sys.path.append("/home/felipe/doutorado/CPE883-2025-02/experiments/CEEMDAN/")
+from utils import corr_per_scale
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset/'
 
@@ -39,7 +43,7 @@ class Collector:
     
     def read_data(
             self, file, serie_size, window_size, predict_steps, batch_size=None,
-            year=2017, freq_transform=True
+            year=2017, freq_transform=True, transform_method='wavelets', scales=np.arange(0.5, 10, 0.1),
             ):
         
         if file=='final_la_haute_R0711.csv':
@@ -63,43 +67,18 @@ class Collector:
         signal = df['P_avg'].values[0:serie_size]
         time = df['Date'].values[0:serie_size]
 
-        X, y = create_sliding_windows_and_targets(signal, window_size=window_size, predict_steps=predict_steps)
-
         if freq_transform:
-            coefficients_list = []
-            coefficients_list = create_freq_transform(X)
-            dataset = CoefficientsDataset(coefficients_list, y)
-
-            return dataset
+            coefficients = create_freq_transform(signal, transform_method=transform_method, scales=scales, plot=False)
+            # coefs_analysis(coefficients)
+            # corr_per_scale(coefficients, signal, plot=False)
+            X, y = create_sliding_windows_and_targets(signal, coefficients, window_size=window_size, predict_steps=predict_steps)
+            dataset = CoefficientsDataset(X, y)
 
         else:
-            # 2. Dividir em treino/teste
-            split = int(0.8 * len(X))
-            X_train, y_train = X[:split], y[:split]
-            X_test, y_test = X[split:], y[split:]
-
-            # X_train shape: (num_samples, window_size)
-            scaler_X = StandardScaler()
-            X_train_scaled = scaler_X.fit_transform(X_train)  # shape permanece (num_samples, window_size)
-            X_test_scaled = scaler_X.transform(X_test)
-
-            # Normalização y
-            y_train = y_train.reshape(-1,1)
-            y_test = y_test.reshape(-1,1)
-            scaler_y = StandardScaler()
-            y_train_scaled = scaler_y.fit_transform(y_train)
-            y_test_scaled = scaler_y.transform(y_test)
-
-            # Criar datasets (normalmente o dataset adiciona a dimensão da feature)
-            train_dataset = PowerSeriesDataset(X_train_scaled, y_train_scaled)
-            test_dataset = PowerSeriesDataset(X_test_scaled, y_test_scaled)
-
-            # 6. Criar DataLoaders
-            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+            X, y = create_sliding_windows_and_targets(signal, None, window_size=window_size, predict_steps=predict_steps)
             dataset = PowerSeriesDataset(X, y)
 
-            return train_loader, test_loader
+        return dataset
 
 
     def create_date_feats(self, df):
@@ -110,91 +89,105 @@ class Collector:
         return df
 
 
-def create_sliding_windows_and_targets(signal, window_size=100, predict_steps=1):
+def create_sliding_windows_and_targets(signal, coefficients=None, window_size=100, predict_steps=1):
     X_windows = []
     y_targets = []
 
-    for i in range(len(signal) - window_size - predict_steps + 1):
-        window = signal[i : i + window_size]
-        target = signal[i + window_size : i + window_size + predict_steps]
+    # Se for 1D, mantém 1D
+    if coefficients is None:
+        data = signal  # shape: (length,)
+    else:
+        data = coefficients.T  # shape: (length, num_features)
+
+    n_samples = data.shape[0]
+
+    for i in range(n_samples - window_size - predict_steps + 1):
+        window = data[i : i + window_size]          # shape: (window_size,) ou (window_size, num_features)
+        target = signal[i + window_size + predict_steps - 1]  # pega apenas 1 valor futuro
         X_windows.append(window)
         y_targets.append(target)
 
-    return np.array(X_windows), np.array(y_targets)
+    X_windows = np.array(X_windows)  # (num_samples, window_size) ou (num_samples, window_size, num_features)
+    y_targets = np.array(y_targets)[:, np.newaxis]  # (num_samples, 1)
+
+    return X_windows, y_targets
 
 
-def create_freq_transform(X, log=False, plot=False, transform_method='wavelets'):
+def create_freq_transform(signal, log=False, plot=False, transform_method='wavelets', scales=np.arange(0.5, 10, 0.1)):
+    """
+    Aplica transformada de frequência em uma série temporal completa.
+    
+    Args:
+        signal (np.array): série temporal 1D completa
+        log (bool): aplicar escala logarítmica nos plots
+        plot (bool): exibir plots de signal + espectrograma
+        transform_method (str): 'wavelets' ou 'stft'
+        scales (np.array): escalas para CWT (wavelets)
+    
+    Returns:
+        np.array: coeficientes da transformada (num_scales x signal_length)
+    """
 
-    coefficients_list = []
+    if transform_method == 'wavelets':
+        wavelet = 'mexh'  # wavelet usada
+        coefficients, frequencies = pywt.cwt(signal, scales, wavelet)  # (num_scales, signal_length)
 
-    for x_window in X:
-        
-        # Assign the signal series of the window
-        signal = x_window
-        # Create a time index (Need to change to the real date index)
-        time = np.arange(0, len(signal))
-        
-        if transform_method=='wavelets':
-            # Parameters for CWT
-            # Choose Haar wavelet for CWT
-            wavelet = 'mexh'
-            scales = np.arange(0.5, 10, 0.1)  # Range of scales to analyze, adjust as needed
+        if plot:
+            time = np.arange(len(signal))
+            fig, ax = plt.subplots(2, figsize=(12, 6))
+            ax[0].plot(time, signal)
+            ax[0].set_title('Original Signal')
+            ax[0].set_xlabel('Time')
+            ax[0].set_ylabel('Amplitude')
 
-            # Perform CWT
-            coefficients, frequencies = pywt.cwt(signal, scales, wavelet)
+            pcm = ax[1].pcolormesh(time, scales, coefficients, shading='auto', cmap='jet')
+            ax[1].set_ylabel('Scale')
+            ax[1].set_xlabel('Time')
+            ax[1].set_title('Scalogram (CWT)')
+            fig.colorbar(pcm, ax=ax[1], label='Magnitude')
+            ax[1].invert_yaxis()
 
-            # coefficients.shape = (num_scales, signal_length)
-
-            if plot:
-                fig, ax = plt.subplots(2, figsize=(12, 6))
-
-                # Plot the signal
-                ax[0].plot(time, signal)
-                ax[0].set_title('Original P_avg Signal')
-                ax[0].set_xlabel('Time Index')
-                ax[0].set_ylabel('Amplitude')
-
-                # Plot scalogram
-                pcm = ax[1].pcolormesh(time, scales, coefficients, shading='auto', cmap='jet')
-                ax[1].set_ylabel('Scale')
-                ax[1].set_xlabel('Time Index')
-                ax[1].set_title('Scalogram (CWT) of P_avg signal')
-
-                # Add colorbar for scalogram
-                fig.colorbar(pcm, ax=ax[1], label='Magnitude')
-
-                # Invert the y axis. Generally in scalogram its commom to see the scales inverted
-                # and the frequencies as it is
+            if log:
+                ax[1].set_yscale('log')
                 ax[1].invert_yaxis()
 
-                if log:
-                    pass
-                    # ax[1].set_yscale('log')
-                    # Invert the y-axis because extent flips it
-                    # ax[1].invert_yaxis()  # to keep scale increasing from bottom to top
+            plt.tight_layout()
+            plt.show()
 
+        return coefficients
 
-                plt.tight_layout()
-                plt.show()
+    elif transform_method == 'stft':
+        # 10 minutos de intervalo da série de energia eólica coletada
+        fs = 1/600  # Hz
+        f, t, Zxx = stft(signal, fs=fs, window='hann', nperseg=288, noverlap=144)  
+        # 288 pontos = 2 dias de dados (com 10min cada amostra)
 
-            coefficients_list.append(coefficients)
+        spectrogram = np.abs(Zxx)
 
-        if transform_method=='stft':
-                f, t, Zxx = stft(signal, window='hann', nperseg=10, noverlap=4)
-                spectrogram = np.abs(Zxx)
+        if plot:
+            time = np.arange(len(signal))
+            fig, ax = plt.subplots(2, 1, figsize=(12, 6), sharex=False)
 
-                if plot:
-                    plt.figure(figsize=(12, 5))
-                    plt.pcolormesh(t, f, spectrogram, shading='gouraud')
-                    plt.title('STFT Magnitude Spectrogram')
-                    plt.ylabel('Frequency [Hz]')
-                    plt.xlabel('Time [sec]')
-                    plt.colorbar(label='Magnitude')
-                    plt.tight_layout()
-                    plt.show()
-                coefficients_list.append(spectrogram)
+            # --- Sinal original ---
+            ax[0].plot(time, signal)
+            ax[0].set_title('Sinal Original')
+            ax[0].set_ylabel('Amplitude')
 
-    return np.array(coefficients_list)
+            # --- STFT / Espectrograma ---
+            pcm = ax[1].pcolormesh(t, f*86400, spectrogram, shading='gouraud', cmap='jet')  # f*86400: ciclos/dia
+            ax[1].set_title('STFT - Espectrograma em Ciclos por Dia')
+            ax[1].set_xlabel('Tempo [amostras]')
+            ax[1].set_ylabel('Frequência [ciclos/dia]')
+            ax[1].set_ylim(0, 72)  # até 10 ciclos/dia
+            fig.colorbar(pcm, ax=ax[1], label='Magnitude')
+
+            plt.tight_layout()
+            plt.show()
+
+        return spectrogram
+
+    else:
+        raise ValueError("transform_method must be 'wavelets' or 'stft'")
 
 
 # Coefficients Dataset
@@ -231,7 +224,7 @@ class CreateTrainTest():
     def __init__(self):
         pass
 
-    def create_data(self, df, months=[1, 2], look_back=1, data_partition=0.8):
+    def create_data(self, df, months=[1, 2], look_back=6, data_partition=0.8):
 
 
         data1=df.loc[df['Month'].isin(months)]
@@ -268,7 +261,7 @@ class CreateTrainTest():
 
         return X, y, X1, y1
 
-    def create_lookback_data(self, dataset, look_back=1):
+    def create_lookback_data(self, dataset, look_back=6):
 
         dataX, dataY = [], []
         for i in range(len(dataset)-look_back-1):

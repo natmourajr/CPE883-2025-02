@@ -27,98 +27,136 @@ file = 'final_la_haute_R0711.csv'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 from matplotlib import pyplot as plt
 import numpy as np
+import time
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.metrics import mean_squared_error
 from collector import Collector
 from LSTM_model import LSTMPredictor
 
+from utils import train_model, NormalizedDataset
+
 
 base_path = '/home/felipe/doutorado/CEEMDAN-EWT-LSTM/dataset'
+
+
+def LSTM(serie_size=-1, window_size=6, predict_steps=1, batch_size=32, epochs=20,
+        input_size=1, hidden_size=64, num_layers=2, output_size=1, test_ratio=0.2,
+        folds=4):
     
+    """
+    Window size is the same that look_back
+    """
 
-def train_model(model, train_loader, test_loader, epochs=20, lr=1e-3):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
-
-    train_losses, val_losses = [], []
-
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
-        for xb, yb in train_loader:
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            preds = model(xb)
-            loss = criterion(preds, yb)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-        train_losses.append(train_loss / len(train_loader))
-
-        # validation
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for xb, yb in test_loader:
-                xb, yb = xb.to(device), yb.to(device)
-                preds = model(xb)
-                loss = criterion(preds, yb)
-                val_loss += loss.item()
-        val_losses.append(val_loss / len(test_loader))
-
-        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_losses[-1]:.4f} | Val Loss: {val_losses[-1]:.4f}")
-
-    return train_losses, val_losses
-
-
-if __name__=='__main__':
-
-    # Parameters
-    serie_size = -1
-    window_size = 50    # Number of examples in each time series batch
-    predict_steps = 1
-    batch_size = 32
-    epochs = 20
-
-    input_size = 1
-    hidden_size = 64
-    num_layers = 2
-    output_size = 1
+    np.random.seed(42)
 
     # Dataset & DataLoader
     ceemdan_collector = Collector(base_path)
-    train_loader, test_loader  = ceemdan_collector.read_data(
+    
+    dataset  = ceemdan_collector.read_data(
         file, serie_size, window_size, predict_steps, batch_size, freq_transform=False
     )
 
-    model = LSTMPredictor(input_size, hidden_size, num_layers, output_size)
+    split = int(len(dataset) * (1 - test_ratio))
+    train_val_ds = torch.utils.data.Subset(dataset, range(split))
+    test_ds = torch.utils.data.Subset(dataset, range(split, len(dataset)))
+    
+    # -----------------------------
+    # Validação cruzada temporal
+    # -----------------------------
+    tscv = TimeSeriesSplit(n_splits=folds)
+    val_losses_all = []
 
-    # Train
-    train_loss, val_loss = train_model(model, train_loader, test_loader, epochs=epochs)
+    for fold, (train_idx, val_idx) in enumerate(tscv.split(train_val_ds)):
+        print(f"Fold {fold+1}")
+        
+        train_ds = torch.utils.data.Subset(train_val_ds, train_idx)
+        val_ds = torch.utils.data.Subset(train_val_ds, val_idx)
 
-    # Plot loss
-    plt.plot(train_loss, label="Train Loss")
-    plt.plot(val_loss, label="Val Loss")
-    plt.legend()
-    plt.title("Loss over epochs")
-    plt.show()
+        train_ds = NormalizedDataset(train_ds, fit=True)
+        val_ds = NormalizedDataset(
+            val_ds,
+            mean_X=train_ds.mean_X, std_X=train_ds.std_X,
+            mean_y=train_ds.mean_y, std_y=train_ds.std_y,
+            fit=False
+        )
+        
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=False)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+        
+        # Inicializa modelo novo
+        model = LSTMPredictor(input_size, hidden_size, num_layers, output_size)
+        
+        # Treina
+        train_loss, val_loss = train_model(model, train_loader, val_loader, epochs=epochs)
+        
+        val_losses_all.append(val_loss[-1])
+        
+        # Plot loss por fold
+        plt.plot(train_loss, label="Train Loss")
+        plt.plot(val_loss, label="Val Loss")
+        plt.title(f"Fold {fold+1} Loss")
+        plt.legend()
+        plt.show()
 
-    # Evaluate final model on test set
-    model.eval()
+    # Estatísticas da validação cruzada
+    mean_val_loss = np.mean(val_losses_all)
+    std_val_loss = np.std(val_losses_all)
+    rmse_all = np.sqrt(val_losses_all)         # RMSE por fold
+    mean_rmse = np.mean(rmse_all)
+    std_rmse = np.std(rmse_all)
+
+    print(f"Validação Cruzada: μ MSE = {mean_val_loss:.4f}, σ MSE = {std_val_loss:.4f}")
+    print(f"Validação Cruzada: μ RMSE = {mean_rmse:.4f}, σ RMSE = {std_rmse:.4f}")
+
+
+
+    # -----------------------------
+    # Treina modelo final em todo treino + val
+    # -----------------------------
+    train_val_ds = NormalizedDataset(train_val_ds, fit=True)
+    test_ds = NormalizedDataset(
+        test_ds,
+        mean_X=train_val_ds.mean_X, std_X=train_val_ds.std_X,
+        mean_y=train_val_ds.mean_y, std_y=train_val_ds.std_y,
+        fit=False
+    )
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
+
+    start_time = time.time()
+    full_train_loader = DataLoader(train_val_ds, batch_size=batch_size, shuffle=False)
+    final_model = LSTMPredictor(input_size, hidden_size, num_layers, output_size)
+    train_model(final_model, full_train_loader, test_loader=None, epochs=epochs)  # Sem validação agora
+    end_time = time.time()
+    
+    train_time = end_time - start_time
+    print(f"Tempo de treino final: {train_time:.2f} segundos")
+
+
+    # -----------------------------
+    # Avaliação no conjunto de teste
+    # -----------------------------
+    final_model.eval()
     preds = []
     actuals = []
 
     with torch.no_grad():
         for xb, yb in test_loader:
-            xb = xb.to(next(model.parameters()).device)
-            pred = model(xb).cpu().numpy()
+            xb = xb.to(next(final_model.parameters()).device)
+            pred = final_model(xb).cpu().numpy()
             preds.append(pred)
             actuals.append(yb.numpy())
 
     preds = np.concatenate(preds)
     actuals = np.concatenate(actuals)
+
+    mse = mean_squared_error(actuals, preds)
+    rmse = np.sqrt(mse)
+
+    print(f"MSE final no conjunto de teste: {mse:.6f}")
+    print(f"RMSE final no conjunto de teste: {rmse:.6f}")
 
     # Plot predictions vs ground truth
     plt.figure(figsize=(10, 4))
@@ -127,3 +165,10 @@ if __name__=='__main__':
     plt.legend()
     plt.title("Model Predictions vs Actual on Test Set")
     plt.show()
+
+    print("Finished...")
+
+
+if __name__=='__main__':
+
+   LSTM()
